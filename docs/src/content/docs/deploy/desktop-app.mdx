@@ -61,6 +61,16 @@ flowchart LR
 - Nod doesn't change your default WSL distribution or global WSL settings.
 
 </TabItem>
+<TabItem label="Linux (preview)" icon="linux">
+
+- A Flatpak runs Electron, the Nod server and the same Lima runtime as the Mac, with QEMU and KVM instead of Apple's Virtualization framework. It isn't published yet; see [Build a Linux Flatpak](/contribute/desktop-releases/#build-a-linux-flatpak-preview).
+- The VM, its firewall rules, container protection and the PostgreSQL, workspace and browser containers are the same as on a Mac. Docker runs only inside the VM, and Nod never uses a Docker installation on your computer.
+- Nod needs `/dev/kvm`. Without hardware virtualization it refuses to start its private computer rather than fall back to slow emulation.
+- The VM files live in `~/.var/app/io.n8n.Nod/.nod-desktop`. Saved keys use your desktop's Secret Service, such as GNOME Keyring or KWallet; Nod refuses to save keys when no secret store is available.
+- Flatpak updates the app. Nod's own update checks are off on Linux.
+- [Local files](/connect/local-files/) isn't available on Linux yet, because the Flatpak has no access to your home folder.
+
+</TabItem>
 </Tabs>
 
 The workspace and browser have separate networks, no access to your home folder, no Docker socket and no model keys. Model requests go to the provider you connect, or to a [local model](/connect/local-models/) server you run.

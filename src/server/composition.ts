@@ -476,7 +476,7 @@ export function createDefaultAdapters(
     passwordManager: createOnePassword({
       open: desktopMode ? desktopOnePassword() : forkedOnePassword(env.NOD_APP_VERSION || 'source'),
     }),
-    trash: desktopMode ? desktopTrash() : undefined,
+    trash: desktopMode && process.platform !== 'linux' ? desktopTrash() : undefined,
     workspace: createDockerWorkspace({
       container: env.WORKSPACE_CONTAINER || 'nod-workspace',
       workspaceRoot: join(dataRoot, 'workspaces'),
