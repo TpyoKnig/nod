@@ -5,7 +5,12 @@ import { dirname, join } from 'node:path';
 
 const autostartEntry =
   '[Desktop Entry]\nType=Application\nName=Nod\nExec=flatpak run io.n8n.Nod\nX-Flatpak=io.n8n.Nod\n';
-const autostartPath = () => join(homedir(), '.config', 'autostart', 'io.n8n.Nod.desktop');
+const autostartPath = () =>
+  join(
+    process.env.HOST_XDG_CONFIG_HOME || join(homedir(), '.config'),
+    'autostart',
+    'io.n8n.Nod.desktop',
+  );
 
 export function opensAtLogin() {
   if (process.platform !== 'linux') {
