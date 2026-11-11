@@ -4996,8 +4996,8 @@ test(
             },
           }),
         },
+        setOpenAtLogin() {},
         app: {
-          setLoginItemSettings() {},
           relaunch() {
             assert.equal(storageCleared && cacheCleared, true);
             assert.equal(existsSync(profiles[0]), false);

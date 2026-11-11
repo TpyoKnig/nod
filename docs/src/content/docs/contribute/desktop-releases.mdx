@@ -264,7 +264,7 @@ flatpak run io.n8n.Nod
 
 `desktop:prepare` builds the workspace and browser images and downloads the pinned Lima, Docker and Ubuntu files. `desktop:linux:build` packages the app in `dist/desktop/Nod-linux-<arch>`, and the manifest builds QEMU, libslirp and the OpenSSH client that Lima needs.
 
-The Flatpak gets KVM, network, display, audio, notification, tray and Secret Service access. It has no access to your home folder; `--persist=.nod-desktop` keeps the VM in the app's own data folder.
+The Flatpak gets KVM, network, display, audio, notification, tray and Secret Service access, and your home folder and external drives under `/media` and `/run/media` for Local files and downloads, as the Mac and Windows apps have. The VM lives in `~/.nod-desktop`, as on a Mac.
 
 ## Signing limits
 

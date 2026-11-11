@@ -14,7 +14,9 @@ finish-args:
   - --socket=pulseaudio
   - --device=dri
   - --device=kvm
-  - --persist=.nod-desktop
+  - --filesystem=home
+  - --filesystem=/media
+  - --filesystem=/run/media
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.freedesktop.secrets
   - --talk-name=org.kde.kwalletd5
