@@ -512,6 +512,7 @@ test(
       const reviews: Array<Record<string, any>> = [];
       const prompts: string[] = [];
       let duringReview: () => Promise<void> = async () => {};
+      let duringReply: () => Promise<void> = async () => {};
       let aligned:
         boolean | string | ((input: Record<string, any>) => boolean | Record<string, unknown>) =
         false;
@@ -541,6 +542,7 @@ test(
         review: async (instructions, input) => {
           if ('reply' in input) {
             replies.push(input);
+            await duringReply();
             const reply = String(input.reply)
               .replace(/[.!]+$/, '')
               .toLowerCase();
@@ -1044,6 +1046,51 @@ test(
             { confirm: true, reason: 'unrequested' },
           );
           assert.equal(reviews.length, reviewed + 1);
+        },
+      );
+
+      await t.test(
+        'a request the owner stopped, or whose continuation the owner stopped, is never owner words or a proposal for a later reply',
+        async () => {
+          const answered = await begin('Email Ana the answered invoice.');
+          await finish(answered.turnId);
+          await finish((await begin('Thanks, that is all.')).turnId, 'succeeded');
+          const continued = await begin('Email Carol the continued invoice.');
+          await finish(continued.turnId);
+          await thread.resumeTurn(
+            continued.turnId,
+            `synthetic-resume:${continued.turnId}`,
+            'The synthetic sign-in finished. Continue the request.',
+          );
+          const stopped = await begin('Email Bob the stopped invoice.');
+          await thread.reply(stopped, 'Should I send Bob the stopped invoice now?');
+          await thread.stopThread();
+          const later = await begin('Yes, go ahead.');
+          aligned = (input) =>
+            input.userMessages.some((message: { text: string }) =>
+              /continued invoice|stopped invoice/.test(message.text),
+            ) || /stopped invoice/.test(input.assistantMessageBeforeLatestUserMessage ?? '');
+          try {
+            assert.deepEqual(
+              await trust.check(later, 'GMAIL_SEND_EMAIL', email('bob@example.test')),
+              {
+                confirm: true,
+                reason: 'unrequested',
+              },
+            );
+            const seen = reviews
+              .at(-1)!
+              .userMessages.map((message: { text: string }) => message.text);
+            assert.deepEqual(seen.slice(-3), [
+              'Email Ana the answered invoice.',
+              'Thanks, that is all.',
+              'Yes, go ahead.',
+            ]);
+            assert.equal(reviews.at(-1)!.assistantMessageBeforeLatestUserMessage, undefined);
+            assert.ok(!seen.some((text: string) => /continued invoice|stopped invoice/.test(text)));
+          } finally {
+            await finish(later.turnId, 'cancelled');
+          }
         },
       );
 
@@ -2074,7 +2121,7 @@ test(
             db.pool,
           );
           assert.equal(forged, undefined);
-          assert.equal((await stored(first.id)).status, 'expired');
+          assert.equal((await stored(first.id)).status, 'pending');
           const second = await ask();
           await transaction(
             async (client) =>
@@ -2085,6 +2132,34 @@ test(
             db.pool,
           );
           assert.equal((await stored(second.id)).status, 'confirmed');
+          const channel = 'telegram:fixture-reply-race';
+          const asked = await begin('Synthetic chat-app request', { channel });
+          const seen = await propose(asked, 'NOD_notification_preferences_update', {
+            notificationRule: 'Seen before the reply',
+          });
+          await finish(asked.turnId);
+          const reading = deferred();
+          const held = deferred();
+          duringReply = async () => {
+            reading.resolve();
+            await held.promise;
+          };
+          const submitted = messages.submit(reply, [], { channel });
+          await Promise.race([reading.promise, submitted]);
+          duringReply = async () => {};
+          const later = await running(
+            await thread.enqueueTurn('Synthetic background check', { source: 'event', channel }),
+          );
+          const unseen = await propose(later, 'NOD_notification_preferences_update', {
+            notificationRule: 'Asked while the reply was read',
+          });
+          await finish(later.turnId);
+          held.resolve();
+          const answered = await submitted;
+          assert.equal((await stored(unseen)).status, 'pending');
+          assert.equal(await turnStatus(later.turnId), 'waiting');
+          assert.equal((await stored(seen)).status, 'confirmed');
+          assert.equal((await stored(seen)).execution_turn_id, answered.turnId);
           delete replyAnswers[reply];
           await thread.stopThread();
         },
