@@ -2,8 +2,9 @@
 import { Image, Picture } from 'astro:assets';
 import '../styles/nod.css';
 import n8nLogo from '../assets/landing/n8n-logo.svg?url';
-import crosshair from '../assets/landing/crosshair.svg?url';
 import githubIcon from '../assets/landing/github.svg?url';
+import appleIcon from '../assets/landing/apple.svg?url';
+import windowsIcon from '../assets/landing/windows.svg?url';
 import nodMark from '../assets/landing/nod-mark.svg?url';
 import heroCollage from '../assets/landing/hero-collage.png';
 import heroVideoPoster from '../assets/landing/hero-video-poster.jpg';
@@ -96,7 +97,6 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
       <main class="lp-main">
       <section class="lp-hero">
         <div class="lp-hero-top">
-          <p class="lp-eyebrow mono">More tasks than time?</p>
           <div class="lp-hero-headline-frame lp-dot-grid-bg">
             <h1 class="lp-hero-headline">
               <span class="lp-hero-name"
@@ -122,20 +122,18 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
           <div class="lp-hero-cta">
             <div class="lp-hero-buttons">
               <div class="lp-cta-frame">
-                <a class="lp-download-btn mono" href={installGuide} data-download="label">Choose installer</a>
-                <img class="lp-crosshair tl" src={crosshair} alt="" />
-                <img class="lp-crosshair tr" src={crosshair} alt="" />
-                <img class="lp-crosshair bl" src={crosshair} alt="" />
-                <img class="lp-crosshair br" src={crosshair} alt="" />
+                <a class="lp-download-btn lp-download-btn-platform mono" href={installGuide} data-download="label"
+                  ><img class="lp-btn-icon lp-os-icon mac" src={appleIcon} alt="" /><img
+                    class="lp-btn-icon lp-os-icon windows"
+                    src={windowsIcon}
+                    alt=""
+                  /><span data-download-label>Choose installer</span></a
+                >
               </div>
               <div class="lp-cta-frame">
                 <a class="lp-download-btn lp-download-btn-grey mono" href={github} target="_blank" rel="noopener"
                   ><img class="lp-btn-icon" src={githubIcon} alt="" />View the code</a
                 >
-                <img class="lp-crosshair tl" src={crosshair} alt="" />
-                <img class="lp-crosshair tr" src={crosshair} alt="" />
-                <img class="lp-crosshair bl" src={crosshair} alt="" />
-                <img class="lp-crosshair br" src={crosshair} alt="" />
               </div>
             </div>
             <p class="lp-platforms">
@@ -199,7 +197,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
 
       <section class="lp-hard-ones-heading">
         <div class="lp-hard-ones-frame wide lp-dot-grid-bg">
-          <h2>On your machine, on your <span class="lp-pink-accent">word</span></h2>
+          <h2>On your machine, on your word</h2>
         </div>
         <p class="lp-hard-ones-sub">It gets on with the work, and asks before it speaks for you.</p>
       </section>
@@ -207,10 +205,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
       <div class="lp-stack">
         <div class="lp-pillar">
           <div class="lp-claim">
-            <div class="lp-claim-header">
-              <p class="lp-claim-eyebrow">On your machine</p>
-              <h3 class="lp-claim-heading">Walk into every call prepared</h3>
-            </div>
+            <h3 class="lp-claim-heading">Walk into every call prepared</h3>
             <div class="lp-claim-body">
               <p class="lp-claim-paragraph">
                 Every morning, Nod reads your threads, your calendar and the client's latest news, and writes a one-page brief
@@ -283,10 +278,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
 
         <div class="lp-pillar">
           <div class="lp-claim">
-            <div class="lp-claim-header">
-              <p class="lp-claim-eyebrow">On your word</p>
-              <h3 class="lp-claim-heading">Catch the question you missed</h3>
-            </div>
+            <h3 class="lp-claim-heading">Catch the question you missed</h3>
             <div class="lp-claim-body">
               <p class="lp-claim-paragraph">
                 Nod finds the question you never answered, like a client's pricing ask from last week, and drafts the reply
@@ -347,10 +339,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
 
         <div class="lp-pillar">
           <div class="lp-claim">
-            <div class="lp-claim-header">
-              <p class="lp-claim-eyebrow">On your key</p>
-              <h3 class="lp-claim-heading">Hear about it when it matters</h3>
-            </div>
+            <h3 class="lp-claim-heading">Hear about it when it matters</h3>
             <div class="lp-claim-body">
               <p class="lp-claim-paragraph">
                 Tell Nod to keep an eye on a client's pricing page. It checks every few hours and only speaks up when
@@ -438,7 +427,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
 
       <section class="lp-hard-ones-heading">
         <div class="lp-hard-ones-frame lp-dot-grid-bg">
-          <h2>A memory like an <span class="lp-pink-accent">elephant</span></h2>
+          <h2>A memory like an elephant</h2>
         </div>
         <p class="lp-hard-ones-sub">Say once that Anna, not Bob, handles invoices. It remembers.</p>
       </section>
@@ -480,7 +469,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
 
       <section class="lp-hard-ones-heading">
         <div class="lp-hard-ones-frame lp-dot-grid-bg">
-          <h2>Next on the <span class="lp-pink-accent">list</span></h2>
+          <h2>Next on the list</h2>
         </div>
       </section>
 
@@ -510,7 +499,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
 
       <section class="lp-hard-ones-heading">
         <div class="lp-hard-ones-frame lp-dot-grid-bg">
-          <h2>Straight <span class="lp-pink-accent">answers</span></h2>
+          <h2>Straight answers</h2>
         </div>
       </section>
 
@@ -610,7 +599,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
 
       <section class="lp-hard-ones-heading">
         <div class="lp-hard-ones-frame lp-dot-grid-bg">
-          <h2>Hand it the <span class="lp-pink-accent">hard ones</span></h2>
+          <h2>Hand it the hard ones</h2>
         </div>
         <p class="lp-hard-ones-sub wide">Jobs that take an afternoon of tabs, logins and forms. Nod finishes them start to end.</p>
       </section>
@@ -665,10 +654,6 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
       <section class="lp-final-cta">
         <div class="lp-cta-frame">
           <a class="lp-download-btn lp-final-cta-btn mono" href={installGuide} data-download>Start nodding</a>
-          <img class="lp-crosshair tl" src={crosshair} alt="" />
-          <img class="lp-crosshair tr" src={crosshair} alt="" />
-          <img class="lp-crosshair bl" src={crosshair} alt="" />
-          <img class="lp-crosshair br" src={crosshair} alt="" />
         </div>
       </section>
       </main>

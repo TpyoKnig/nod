@@ -161,26 +161,6 @@ body.lp {
   border-left: 1px solid var(--gray-50);
   font-variant-numeric: tabular-nums;
 }
-.lp-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 0.8em;
-  margin: 0;
-  font-size: 16px;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-.lp-eyebrow::before,
-.lp-eyebrow::after {
-  content: '';
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--pink);
-}
 .lp-logo {
   display: flex;
   flex-direction: column;
@@ -355,35 +335,10 @@ body.lp {
 .lp-hero-buttons {
   display: flex;
   align-items: center;
+  gap: 12px;
 }
 .lp-cta-frame {
-  position: relative;
   display: inline-flex;
-}
-.lp-crosshair {
-  position: absolute;
-  width: 7px;
-  height: 7px;
-}
-.lp-crosshair.tl {
-  top: -3.5px;
-  left: -3.5px;
-}
-.lp-crosshair.tr {
-  top: -3.5px;
-  right: -3.5px;
-}
-.lp-crosshair.bl {
-  bottom: -3.5px;
-  left: -3.5px;
-}
-.lp-crosshair.br {
-  bottom: -3.5px;
-  right: -3.5px;
-}
-.lp-hero-buttons .lp-cta-frame + .lp-cta-frame .lp-crosshair.tl,
-.lp-hero-buttons .lp-cta-frame + .lp-cta-frame .lp-crosshair.bl {
-  display: none;
 }
 .lp-download-btn {
   width: 100%;
@@ -418,6 +373,25 @@ body.lp {
   width: 20px;
   height: 20px;
   display: block;
+}
+.lp-download-btn-platform {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.lp-os-icon {
+  display: none;
+  width: 18px;
+  height: 18px;
+}
+.lp-download-btn-platform[data-os='mac'] .lp-os-icon.mac,
+.lp-download-btn-platform[data-os='windows'] .lp-os-icon.windows {
+  display: block;
+}
+.lp-os-icon.windows {
+  width: 15px;
+  height: 15px;
 }
 .lp-platforms {
   font-size: 14px;
@@ -627,9 +601,6 @@ body.lp {
   white-space: nowrap;
   text-align: center;
 }
-.lp-pink-accent {
-  color: var(--pink);
-}
 .lp-hard-ones-sub {
   font-size: 18px;
   width: 624px;
@@ -672,17 +643,6 @@ body.lp {
   width: 360px;
   flex: none;
   align-self: stretch;
-}
-.lp-claim-header {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.lp-claim-eyebrow {
-  margin: 0;
-  font-size: 15px;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
 }
 .lp-claim-heading {
   margin: 0;
@@ -2086,9 +2046,6 @@ body.lp {
   }
   .lp-header .lp-capsule,
   .lp-crumb,
-  .lp-eyebrow {
-    font-size: clamp(12px, 3.2vw, 16px);
-  }
   .lp-header .lp-capsule {
     padding: 0.625em 0.9375em;
   }
@@ -2192,12 +2149,6 @@ body.lp {
   .lp-hero-buttons {
     flex-direction: column;
     align-items: stretch;
-  }
-  .lp-hero-buttons .lp-cta-frame + .lp-cta-frame .lp-crosshair.bl {
-    display: block;
-  }
-  .lp-hero-buttons .lp-cta-frame + .lp-cta-frame .lp-crosshair.tr {
-    display: none;
   }
   .lp-download-btn-grey {
     width: 100%;

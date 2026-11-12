@@ -1,7 +1,7 @@
 const installers = {
-  'darwin-arm64': { file: 'nod-arm64.dmg', label: 'Download for Mac' },
-  'darwin-x64': { file: 'nod-x64.dmg', label: 'Download for Mac' },
-  'win32-x64': { file: 'nod-Setup-x64.exe', label: 'Download for Windows' },
+  'darwin-arm64': { file: 'nod-arm64.dmg', label: 'Download for Mac', os: 'mac' },
+  'darwin-x64': { file: 'nod-x64.dmg', label: 'Download for Mac', os: 'mac' },
+  'win32-x64': { file: 'nod-Setup-x64.exe', label: 'Download for Windows', os: 'windows' },
   mobile: { label: 'Install on your computer' },
 };
 const release = 'https://github.com/n8n-io/nod/releases/latest/download';
@@ -40,7 +40,9 @@ export function startDownload() {
     if (!installer) return;
     for (const link of links) {
       if (installer.file) link.href = `${release}/${installer.file}`;
-      if (link.dataset.download === 'label') link.textContent = installer.label;
+      if (link.dataset.download !== 'label') continue;
+      if (installer.os) link.dataset.os = installer.os;
+      link.querySelector('[data-download-label]').textContent = installer.label;
     }
   });
 }
