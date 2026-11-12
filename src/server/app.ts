@@ -370,6 +370,8 @@ export async function createApp(dependencies: AppDependencies = {}) {
         before: z.iso.datetime({ offset: true }).optional(),
         beforeId: z.uuid().optional(),
         threadId: z.uuid().optional(),
+        // Small clients (the G2 glasses) page in small batches; the web app keeps the default.
+        limit: z.coerce.number().int().min(1).max(60).default(60),
       })
       .parse(request.query);
     const thread = await activeThread(pool);
@@ -382,13 +384,13 @@ export async function createApp(dependencies: AppDependencies = {}) {
       `SELECT ${messageFields} FROM messages m
       LEFT JOIN messages target ON target.id=m.reply_to_message_id AND target.owner_id=m.owner_id AND target.hidden_at IS NULL
       WHERE m.owner_id=$1 AND m.thread_id=$4 AND m.hidden_at IS NULL AND ($2::timestamptz IS NULL OR date_trunc('milliseconds',m.created_at) < $2 OR (date_trunc('milliseconds',m.created_at) = $2 AND $3::uuid IS NOT NULL AND m.id < $3))
-      ORDER BY date_trunc('milliseconds',m.created_at) DESC,m.id DESC LIMIT 61`,
-      [ownerId, query.before ?? null, query.beforeId ?? null, thread.id],
+      ORDER BY date_trunc('milliseconds',m.created_at) DESC,m.id DESC LIMIT $5`,
+      [ownerId, query.before ?? null, query.beforeId ?? null, thread.id, query.limit + 1],
     );
-    const page = rows.rows.slice(0, 60);
+    const page = rows.rows.slice(0, query.limit);
     return {
       messages: await messageViews(page.reverse()),
-      hasMore: rows.rows.length > 60,
+      hasMore: rows.rows.length > query.limit,
     } satisfies MessageHistoryPage;
   });
   app.post<{ Params: { id: string } }>('/api/messages/:id/reaction', async (request) => {
