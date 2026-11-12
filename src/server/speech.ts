@@ -16,6 +16,17 @@ export class TranscriptionLengthError extends SpeechProviderError {
 }
 export class SpeechSetupError extends SpeechProviderError {}
 
+// Speech-to-text reliably mishears "n8n" (pronounced "n-eight-n"). Fix the spellings that can
+// only mean n8n before the text reaches the conversation. Real names (Nathan, Natan) are left alone.
+const transcriptCorrections: Array<[RegExp, string]> = [
+  [/\bn[\s.-]*(?:8|eight)[\s.-]*n\b/gi, 'n8n'], // n8n, N8N, n 8 n, n-eight-n
+  [/\bn[\s.-]*n[\s.-]*n\b/gi, 'n8n'], // NNN, N N N, N.N.N
+  [/\bnat(?:en|m)\b/gi, 'n8n'], // naten, natm
+];
+function correctTranscript(text: string) {
+  return transcriptCorrections.reduce((out, [pattern, fix]) => out.replace(pattern, fix), text);
+}
+
 function cancellable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return work;
   return new Promise((resolve, reject) => {
@@ -131,7 +142,7 @@ export function createSpeech(provider: SpeechProvider) {
           );
         if (text.length > 100_000) throw new TranscriptionLengthError();
         signal?.throwIfAborted();
-        return text;
+        return correctTranscript(text);
       } catch (error) {
         signal?.throwIfAborted();
         if (error instanceof TranscriptionLengthError || error instanceof SpeechProviderError)
