@@ -68,6 +68,37 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
     suspensions++;
     cancel();
   });
+  // Transcribe only: returns the text without sending anything, so a client (the G2 glasses) can
+  // show what was heard and let the user confirm, re-record, or cancel. Usage is still recorded
+  // by the speech ledger; it just isn't attributed to a turn.
+  app.post('/api/speech/transcribe', audioMessageOptions, async (request) => {
+    const speech = dependencies.speech;
+    if (!speech?.transcriptionConfigured)
+      throw new SpeechSetupError(
+        'Set up audio in Settings → General → Voice. Choose free voices or connect a voice service.',
+      );
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    request.raw.once('aborted', abort);
+    try {
+      const file = await request.file({
+        limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 0 },
+      });
+      if (!file || file.fieldname !== 'file' || !file.mimetype.startsWith('audio/'))
+        throw invalid('Choose an audio recording.');
+      const bytes = await file.toBuffer();
+      if (file.file.truncated || !bytes.length)
+        throw invalid('Choose an audio recording smaller than 25 MB.');
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]);
+      const text = await speech.transcribe(
+        { bytes, mimeType: file.mimetype, name: file.filename || 'voice.wav' },
+        signal,
+      );
+      return { text };
+    } finally {
+      request.raw.off('aborted', abort);
+    }
+  });
   app.post('/api/messages/audio', audioMessageOptions, async (request, reply) => {
     if (suspensions)
       throw privateConflict('Work is stopping. Send the recording again when it finishes.');
