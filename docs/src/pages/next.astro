@@ -132,8 +132,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
             An open source personal agent that chases invoices, preps your calls and cancels trials on real websites. It runs on
             your machine and asks before it acts.
           </p>
-          <div class="lp-hero-cta">
-            <div class="lp-hero-buttons">
+          <div class="lp-hero-buttons">
               <div class="lp-cta-frame">
                 <a class="lp-download-btn lp-download-btn-platform mono" href={installGuide} data-download="label"
                   ><img class="lp-btn-icon lp-os-icon mac" src={appleIcon} alt="" /><img
@@ -149,10 +148,6 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
                 >
               </div>
             </div>
-            <p class="lp-platforms">
-              Free and open source · macOS&nbsp;14+ · Windows&nbsp;11&nbsp;preview
-            </p>
-          </div>
         </div>
 
         <div class="lp-demo-photo">
@@ -495,29 +490,45 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
 
       <p class="lp-memory-evidence lp-trust-stats-footnote">See how we test <a class="lp-stat-link" href={`${benchmarkGuide}#longmemeval-s-recall`}>recall</a> and <a class="lp-stat-link" href={`${benchmarkGuide}#whisperbench-memory-poisoning`}>whether attack emails can plant false memories</a>.</p>
 
-      <section class="lp-trust-stats" aria-labelledby="benchmark-heading">
-        <div class="lp-benchmark-intro">
-          <h2 id="benchmark-heading"><span>678 test runs.</span> <span>Zero actions without permission.</span></h2>
+      <section class="lp-hard-ones-heading">
+        <div class="lp-hard-ones-frame wide lp-dot-grid-bg">
+          <h2>Zero actions without permission</h2>
         </div>
-        <div class="lp-trust-stats-grid">
-          <div class="lp-trust-stat">
-            <p class="lp-trust-stat-number">98%</p>
-            <h3 class="lp-trust-stat-label"><a class="lp-stat-link" href={`${benchmarkGuide}#task-completion`}>Does it finish the job?</a></h3>
-            <p class="lp-trust-stat-desc">Of 226 errands in test accounts and websites, each run three times.</p>
-          </div>
-          <div class="lp-trust-stat">
-            <p class="lp-trust-stat-number">93.2%</p>
-            <h3 class="lp-trust-stat-label"><a class="lp-stat-link" href={`${benchmarkGuide}#longmemeval-s-recall`}>Does it remember what you told it?</a></h3>
-            <p class="lp-trust-stat-desc">Of 500 questions about earlier chats, asked in new sessions <span>(LongMemEval-S)</span>.</p>
-          </div>
-          <div class="lp-trust-stat">
-            <p class="lp-trust-stat-number">0 of 216</p>
-            <h3 class="lp-trust-stat-label"><a class="lp-stat-link" href={`${benchmarkGuide}#whisperbench-memory-poisoning`}>Can an email plant a false memory?</a></h3>
-            <p class="lp-trust-stat-desc">108 published attack emails, tried two ways (WhisperBench).</p>
-          </div>
-        </div>
-        <p class="lp-trust-stats-footnote">October 2026, GPT-6.1 Sol. Errand types come from 900,000+ anonymised production workflows. Your results depend on your model and the sites you use. <a class="lp-stat-link" href={benchmarkGuide}>How we measured this</a></p>
+        <p class="lp-hard-ones-sub">How Nod did in 678 test runs and two public memory tests.</p>
       </section>
+
+      <div class="lp-trust-stats-grid">
+        <div class="lp-trust-stat">
+          <h3>
+            <span class="lp-trust-stat-number">98%</span>
+            <span class="lp-trust-stat-label">of jobs finished</span>
+          </h3>
+          <p class="lp-trust-stat-desc">226 errands, each run three times.</p>
+        </div>
+        <div class="lp-trust-stat">
+          <h3>
+            <span class="lp-trust-stat-number">0 of 678</span>
+            <span class="lp-trust-stat-label">runs acted without permission</span>
+          </h3>
+          <p class="lp-trust-stat-desc">The same runs, checked for any action beyond what the user allowed.</p>
+        </div>
+        <div class="lp-trust-stat">
+          <h3>
+            <span class="lp-trust-stat-number">93%</span>
+            <span class="lp-trust-stat-label">of facts recalled</span>
+          </h3>
+          <p class="lp-trust-stat-desc">500 questions about earlier chats, asked in new sessions.</p>
+        </div>
+        <div class="lp-trust-stat">
+          <h3>
+            <span class="lp-trust-stat-number">0 of 216</span>
+            <span class="lp-trust-stat-label">false memories planted</span>
+          </h3>
+          <p class="lp-trust-stat-desc">108 published attack emails, each tried two ways.</p>
+        </div>
+      </div>
+
+      <p class="lp-trust-stats-footnote">October 2026, GPT-6.1 Sol. Your results depend on your model and the sites you use. <a class="lp-stat-link" href={benchmarkGuide}>How we measured this</a></p>
 
       <section class="lp-hard-ones-heading">
         <div class="lp-hard-ones-frame lp-dot-grid-bg">
@@ -650,7 +661,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
       </div>
 
       <section class="lp-hard-ones-heading">
-        <div class="lp-hard-ones-frame lp-dot-grid-bg">
+        <div class="lp-hard-ones-frame final lp-dot-grid-bg">
           <h2>Give Nod its first job</h2>
         </div>
       </section>
