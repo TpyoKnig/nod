@@ -13,6 +13,11 @@ export function startFaq() {
     summary.addEventListener('click', (event) => {
       event.preventDefault();
       const opening = !item.open || item.classList.contains('is-closing');
+      if (opening) {
+        for (const other of document.querySelectorAll('.lp-faq[open]:not(.is-closing)')) {
+          if (other !== item) other.querySelector('summary').click();
+        }
+      }
 
       if (reduce.matches) {
         item.open = opening;

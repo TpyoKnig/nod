@@ -19,6 +19,7 @@
   --white: #fafafa;
   --pink: #ff91ac;
   --pink-hover: #ff7a9b;
+  --pink-dark: oklch(56% 0.135 4.94);
   --pink-10: #ffe8ec;
   --gray-15: #f1f1f1;
   --gray-20: #eaeaea;
@@ -463,7 +464,7 @@ body.lp {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  border: 1px solid var(--gray-30);
+  background: var(--gray-15);
   border-radius: var(--radius-xl);
 }
 .lp-trust-stat h3 {
@@ -495,6 +496,7 @@ body.lp {
   text-underline-offset: 3px;
 }
 .lp-stat-link:hover {
+  color: var(--pink-dark);
   text-decoration-color: currentColor;
 }
 .lp-stat-link:focus-visible {
@@ -1365,7 +1367,7 @@ body.lp {
   text-underline-offset: 3px;
 }
 .lp-faq p a:hover {
-  color: var(--pink);
+  color: var(--pink-dark);
   text-decoration-color: currentColor;
 }
 
