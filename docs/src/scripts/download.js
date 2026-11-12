@@ -40,9 +40,9 @@ export function startDownload() {
     if (!installer) return;
     for (const link of links) {
       if (installer.file) link.href = `${release}/${installer.file}`;
-      if (link.dataset.download !== 'label') continue;
       if (installer.os) link.dataset.os = installer.os;
-      link.querySelector('[data-download-label]').textContent = installer.label;
+      if (link.dataset.download === 'label')
+        link.querySelector('[data-download-label]').textContent = installer.label;
     }
   });
 }
