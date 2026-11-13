@@ -51,6 +51,8 @@ The About you profile can link this ID's events to its fixed choices. If you sub
 | Source or self-hosted server | `<NOD_DATA_ROOT>/analytics-id` | `NODE_ENV=production`           |
 | Local desktop runtime        | Desktop profile                | Packaged apps                   |
 
+Official Mac, Windows and Linux desktop releases label events as `production`. Pull request and manual preview builds use `development`.
+
 The owner's sharing choice still applies. Nod disables IP geolocation. Ordinary events don't create PostHog person profiles. Submitting About you explicitly creates or updates a profile with fixed choices under the analytics ID while **Share usage data** is on. This happens whether or not you provide an email. The profile has `onboarding_profile_completed=true` and one property per question:
 
 | Person property           | Value                                                                |
@@ -60,6 +62,8 @@ The owner's sharing choice still applies. Nod disables IP geolocation. Ordinary 
 | `onboarding_who_for`      | Fixed choice, `skipped`, or `not_asked`                              |
 | `onboarding_company_size` | Fixed choice, `skipped`, or `not_asked`                              |
 | `onboarding_jobs`         | Array of fixed choices, `other` for a typed answer, or `['skipped']` |
+
+With **Mostly personal life**, Nod still asks about occupation but skips who-for and company size. Both properties use `not_asked` in the event and on the person profile.
 
 The typed **Something else** text stays out of PostHog and Customer.io. The `onboarding_profile_answered` event keeps per-option booleans for event-time analysis. A new About submission removes any old per-option person properties; existing profiles keep them until resubmitted. Separate consent lets Nod add `email` and the consent flag, time, version, exact checkbox wording, and privacy policy link to the same PostHog profile. The fixed choices accompany the Customer.io signup only after they were shared successfully.
 
@@ -97,7 +101,11 @@ Autonomous work outside a turn uses `work_type=background`, `owner_requested=fal
 
 Server events must pass a strict schema. UI events keep only allowed properties and values. Public provider and app names come from supported catalogs; custom connections report `custom`.
 
-Model events use one `provider` property. Onboarding completion and execution starts report the selected provider. Execution completion reports the last agent provider used, when observed. Each `model_used` event identifies the provider for that request, so model switches remain visible.
+Model events use one `provider` property. Onboarding completion and execution starts report the selected provider. Execution completion reports the last main-agent provider used, when observed. Only `chat`, `task`, and `observer` calls set it. Helper and maintenance calls do not replace it. Older events without a request kind keep their earlier behavior. Each `model_used` event identifies the provider for that request, so model switches remain visible.
+
+Execution results describe one segment. `reply` means a normal reply, file, or visual was committed to the conversation and the segment succeeded. It does not prove delivery by an external chat service, usefulness, or completion of the whole task. `needs_owner` covers questions, approvals, and private sign-in forms. `no_reply` means the segment succeeded without a normal reply; this is expected for many background checks. Failure, cancellation, interruption, and skipped work keep their own results, even if an earlier reply was saved.
+
+Model `request_kind` separates `chat`, `task`, `observer`, `helper`, `compaction`, `cache_warm`, and `auxiliary` calls. Other kinds are `memory`, `review`, `tasks`, `task_classification`, and `unclassified`. Image analysis, attention checks, and nested codemode model calls use `auxiliary`. This uses call metadata, not conversation content. `attempt=1` is an initial agent or curator call; a larger number is a retry of that request. The number resets for the next request and is limited to 1–4, which covers the current retry limits. Other call paths can omit it; absence does not mean there was no retry. The random analytics run ID links observed calls to the segment result. A failed helper or cache-warming call does not by itself mean the owner's work failed.
 
 ### Setup and app interaction
 
@@ -117,7 +125,7 @@ Model events use one `provider` property. Onboarding completion and execution st
 | `settings_viewed`, `tab_viewed`                   | Fixed settings section or Apps page tab.                                                                                                            |
 | `local_setting_changed`                           | Changed, persisted local theme, launch-at-login, or notification choice with a fixed value.                                                         |
 | `notification_opened`                             | Clicked browser reply notification, without its content. Native notification clicks aren't observed.                                                |
-| `chat_message_sent`                               | Attachment/reply booleans, text/voice input, and composer/task-card/ask-Nod/task-reply/answer-choice source.                                        |
+| `chat_message_sent`                               | Attachment/reply booleans, text/voice input, and composer/task-card/ask-Nod/task-reply/answer-choice/approval-card source.                          |
 | `owner_message_accepted`                          | Newly committed owner message by bounded channel. Excludes duplicates, commands, private verification, message text, and private message/turn IDs.  |
 | `chat_stop_requested`                             | Stop requested in the app.                                                                                                                          |
 | `task_card_started`, `task_action`                | Card kind and bounded position, or fixed task control.                                                                                              |
@@ -140,30 +148,32 @@ Native first opens from builds that can emit `server_connection_verified` includ
 
 ### Runs, models, and connected services
 
-| Event                                                   | What it records                                                                                                                                                                      |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `turn_started`                                          | Source, channel, background flag, execution mode, owner-requested flag, selected public model when available, and task taxonomy version when supported.                              |
-| `turn_completed`                                        | The same context, outcome, execution/queue milliseconds, and bounded waiting or failure reason.                                                                                      |
-| `task_classified`                                       | One fixed task purpose, classification status, and taxonomy version for an execution segment.                                                                                        |
-| `task_finished`                                         | Committed task status (`done` or `cancelled`) and actor (`owner` or `agent`).                                                                                                        |
-| `prepared_work_saved`                                   | A changed preparation or saved offer message, with `prepared` or `notified` outcome.                                                                                                 |
-| `prepared_work_updated`                                 | Changed owner-requested control: `useful`, `not_useful`, `handled`, `dismiss`, or `snooze`.                                                                                          |
-| `chat_stopped`, `task_stopped`, `conversation_reset`    | Server-accepted stop or completed reset.                                                                                                                                             |
-| `tool_used`                                             | Fixed tool category, outcome, milliseconds, and subagent flag.                                                                                                                       |
-| `model_used`                                            | Provider/public model, purpose (`agent`, `memory`, `review`, `tasks`, `task_classification`), outcome, token counts, milliseconds, and estimated `cost_usd` when priced.             |
-| `model_connection_changed`, `model_connection_observed` | Provider, API-key/subscription/OAuth method, status or selected-model state, and bounded effort.                                                                                     |
-| `connection_changed`, `connection_observed`             | Public app or `custom`, connection method, and status/bounded failure reason where applicable.                                                                                       |
-| `connection_inventory_observed`                         | Zero-inclusive latest observed connected app types and their count. Public app slugs and `custom` only; no account count or names.                                                   |
-| `channel_connection_observed`                           | Telegram or WhatsApp and a bounded disabled, setup-pending, connected, or configured-unverified state. No handle, number, or account ID.                                             |
-| `service_used`                                          | App, method, outcome, milliseconds, bounded failure reason, and optional preparation phase. Local file actions count as `local_files`, without paths or file names.                  |
-| `source_read`                                           | Source category (`connected_app`, `tasks`, `other`), discovery/record-read operation, outcome, milliseconds, and bounded record/unavailable counts.                                  |
-| `confirmation_changed`                                  | Asked/approved/declined/executed/expired/uncertain, fixed action kind, and turn source.                                                                                              |
-| `secure_entry_changed`                                  | Sign-in/payment/code kind and requested/superseded/approved/submitted/failed/uncertain state.                                                                                        |
-| `settings_updated`                                      | Accepted settings request by section, operation, and optional channel; can include unchanged writes. Channel operations name the request, not confirmed connection or disconnection. |
-| `setting_changed`                                       | Committed setting change by fixed setting, owner/agent/system actor, and bounded state when available. No free-form values.                                                          |
-| `schedule_changed`                                      | Create/update/delete, once/recurring kind, bounded cadence, and user/agent actor.                                                                                                    |
-| `memory_changed`                                        | Note/skill, save/forget/archive/clear, and owner/agent/background actor.                                                                                                             |
-| `vault_changed`, `vault_imported`                       | Login/card kind and operation, or number imported. No domains or inventory.                                                                                                          |
+| Event                                                   | What it records                                                                                                                                                                                                           |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `turn_started`                                          | Source, channel, background flag, execution mode, owner-requested flag, selected public model when available, and task taxonomy version when supported.                                                                   |
+| `turn_completed`                                        | The same context, outcome, result (`reply`, `needs_owner`, `no_reply`, `failed`, `cancelled`, `interrupted`, or `skipped`), execution/queue milliseconds, and bounded waiting or failure reason.                          |
+| `task_classified`                                       | One fixed task purpose, classification status, and taxonomy version for an execution segment.                                                                                                                             |
+| `task_finished`                                         | Committed task status (`done` or `cancelled`) and actor (`owner` or `agent`).                                                                                                                                             |
+| `prepared_work_saved`                                   | A changed preparation or saved offer message, with `prepared` or `notified` outcome.                                                                                                                                      |
+| `prepared_work_updated`                                 | Changed owner-requested control: `useful`, `not_useful`, `handled`, `dismiss`, or `snooze`.                                                                                                                               |
+| `chat_stopped`, `task_stopped`, `conversation_reset`    | Server-accepted stop or completed reset.                                                                                                                                                                                  |
+| `tool_used`                                             | Fixed tool category, outcome, milliseconds, and subagent flag.                                                                                                                                                            |
+| `model_used`                                            | Provider/public model, purpose (`agent`, `memory`, `review`, `tasks`, `task_classification`), bounded request kind, attempt number when known, outcome, token counts, milliseconds, and estimated `cost_usd` when priced. |
+| `model_connection_changed`, `model_connection_observed` | Provider, API-key/subscription/OAuth method, status or selected-model state, and bounded effort.                                                                                                                          |
+| `connection_changed`, `connection_observed`             | Public app or `custom`, connection method, and status/bounded failure reason where applicable.                                                                                                                            |
+| `connection_inventory_observed`                         | Zero-inclusive latest observed connected app types and their count. Public app slugs and `custom` only; no account count or names.                                                                                        |
+| `channel_connection_observed`                           | Telegram or WhatsApp and a bounded disabled, setup-pending, connected, or configured-unverified state. No handle, number, or account ID.                                                                                  |
+| `service_used`                                          | App, method, outcome, milliseconds, bounded failure reason, and optional preparation phase. Local file actions count as `local_files`, without paths or file names.                                                       |
+| `source_read`                                           | Source category (`connected_app`, `tasks`, `other`), discovery/record-read operation, outcome, milliseconds, and bounded record/unavailable counts.                                                                       |
+| `confirmation_changed`                                  | Asked/approved/declined/executed/expired/uncertain, fixed action kind, and turn source.                                                                                                                                   |
+| `secure_entry_changed`                                  | Sign-in/payment/code kind and requested/superseded/approved/submitted/failed/uncertain state.                                                                                                                             |
+| `settings_updated`                                      | Accepted settings request by section, operation, and optional channel; can include unchanged writes. Channel operations name the request, not confirmed connection or disconnection.                                      |
+| `setting_changed`                                       | Committed setting change by fixed setting, owner/agent/system actor, and bounded state when available. Includes the preparation allowance, without its amount. No free-form values.                                       |
+| `schedule_changed`                                      | Create/update/delete, once/recurring kind, bounded cadence, and user/agent actor.                                                                                                                                         |
+| `memory_changed`                                        | Note/skill, save/forget/archive/clear, and owner/agent/background actor.                                                                                                                                                  |
+| `vault_changed`, `vault_imported`                       | Login/card kind and operation, or number imported. No domains or inventory.                                                                                                                                               |
+
+Channel reconnect requests use `settings_updated` with operation `connect_started`, like Telegram setup and QR renewal. This counts accepted requests, not confirmed connections.
 
 An execution segment ends with `succeeded`, a waiting state, `failed`, `cancelled`, `interrupted`, or `skipped`. Success means execution finished; it doesn't verify the whole task. A crash can leave a start without a completion. One turn can handle several queued messages.
 
@@ -247,7 +257,7 @@ Presentation open means expanding the native presentation into its drawer; copy 
 
 `open` and `reveal` follow native API success. `reuse_requested` means the app dispatched a reuse request, not that an attachment was accepted or sent. Reuse locations also cover the command palette (`commands`) and internal file drops (`composer`); artifact views remain limited to message and drawer locations.
 
-Answer-choice views count once per question in a sharing period, while the choices are in the viewport and the app is visible. Selections follow a server-accepted answer. Option toggles, custom composer answers, and failed, rejected, or unavailable submissions are not selections. Accepted choices also emit `chat_message_sent` with `source=answer_choice` and `input=text`. Question and option IDs, labels, selected text, and response content are excluded.
+Answer-choice views count once per question in a sharing period, while the choices are in the viewport and the app is visible. Selections follow a server-accepted answer. Option toggles, answers with only typed text, and failed, rejected, or unavailable submissions are not selections; typed text sent with choices counts only the choices. Accepted choices also emit `chat_message_sent` with `source=answer_choice` and `input=text`. Question and option IDs, labels, selected text, and response content are excluded. An accepted approval-card answer emits `chat_message_sent` with `source=approval_card` and `input=text`; the server's `confirmation_changed` event records whether it approved or declined.
 
 ### Surveys
 

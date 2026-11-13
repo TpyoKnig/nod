@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Task, TaskDetail, TaskStatus } from '../shared/contracts.ts';
-import { actionTitle, toolTitle } from './action-presentation.ts';
+import { recordedAction, toolTitle } from './action-presentation.ts';
 import type { ChannelPresentation } from './channels.ts';
 import { classifyVerificationReply } from '../shared/verification-code.ts';
 import {
@@ -24,7 +24,8 @@ import { snapshotAnalytics, type CaptureAnalytics } from './analytics.ts';
 import { createPreferencesStore, deliveryTime, isQuietTime } from './preferences.ts';
 import { personalSecret } from './memory-tree.ts';
 import { texts as codeTexts } from './chat-verification.ts';
-import { withdrawnSql } from './turn-chain.ts';
+import { waitingTurnSql, withdrawnSql } from './turn-chain.ts';
+import { resemblesTaskAcknowledgement } from '../shared/task-ack.ts';
 
 const now = z.string().trim().min(1);
 const waits = z.array(
@@ -357,6 +358,8 @@ export function createTasks(options: {
     raw: unknown,
     sourceMessageId?: string | null,
     capture?: CaptureAnalytics,
+    priorMessageId?: string,
+    priorHandoff = false,
   ) {
     const request = input.parse(raw);
     if (request.action === 'list') return { tasks: await read(client) };
@@ -420,9 +423,23 @@ export function createTasks(options: {
       const independent = current.proactive || current.session_id === turn.threadId;
       if (independent && !current.proactive && !sourceMessageId)
         throw failure('A new task needs an owner request.');
+      const prior =
+        priorMessageId && sourceMessageId
+          ? (
+              await client.query<{ id: string; text: string }>(
+                `SELECT m.id,m.text FROM messages m WHERE m.id=$1 AND m.owner_id=$2 AND m.thread_id=$3
+                 AND m.turn_id=$4 AND m.role='assistant' AND m.hidden_at IS NULL
+                 AND m.attachments='[]'::jsonb AND m.presentation IS NULL AND m.answer_choices IS NULL
+                 AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.owner_id=m.owner_id AND t.message_id=m.id)`,
+                [priorMessageId, ownerId, turn.threadId, turn.turnId],
+              )
+            ).rows[0]
+          : undefined;
       const messageId = current.proactive
         ? null
-        : await insertAssistantMessage(client, turn, request.message);
+        : prior && resemblesTaskAcknowledgement(prior.text, request.message, priorHandoff)
+          ? prior.id
+          : await insertAssistantMessage(client, turn, request.message);
       const sessionId = independent ? id : current.session_id;
       await client.query(
         `INSERT INTO tasks(id,owner_id,turn_id,session_id,source_message_id,message_id,title,done_when,brief,now_text,steps,waiting_for,next_check,applied_revision,activity_key)
@@ -517,33 +534,33 @@ export function createTasks(options: {
   }
 
   async function resumeDue(threadId: string) {
-    const { rows } = await pool.query<{ id: string; turn_id: string; next_check: Date }>(
-      `SELECT t.id,t.next_check,(SELECT u.id FROM turns u WHERE u.owner_id=t.owner_id AND u.session_id=t.session_id
-         ORDER BY u.created_at DESC,u.id DESC LIMIT 1) AS turn_id
-       FROM tasks t WHERE t.owner_id=$1 AND t.state='open' AND t.next_check<=now()
-         AND (t.activity_key IS NULL OR NOT EXISTS (SELECT 1 FROM preferences p WHERE p.owner_id=t.owner_id AND p.proactive_paused))
-         AND EXISTS (SELECT 1 FROM turns u WHERE u.owner_id=t.owner_id AND u.session_id=t.session_id AND u.thread_id=$2)
-         AND NOT EXISTS (SELECT 1 FROM turns u WHERE u.owner_id=t.owner_id AND u.session_id=t.session_id
-           AND u.status IN ('queued','running','waiting'))`,
-      [ownerId, threadId],
-    );
-    for (const row of rows)
-      await transaction(async (client) => {
-        const due = await client.query(
-          `UPDATE tasks t SET next_check=NULL WHERE t.id=$1 AND t.owner_id=$2 AND t.next_check=$3
-           AND (t.activity_key IS NULL OR NOT EXISTS (SELECT 1 FROM preferences p WHERE p.owner_id=t.owner_id AND p.proactive_paused))`,
-          [row.id, ownerId, row.next_check],
+    const resumed = await transaction(async (client) => {
+      if ((await lockThread(client)).id !== threadId) return false;
+      const { rows } = await client.query<{ id: string; turn_id: string; next_check: Date }>(
+        `WITH due AS (
+           SELECT t.id,t.next_check,(SELECT u.id FROM turns u WHERE u.owner_id=t.owner_id AND u.session_id=t.session_id
+             ORDER BY u.started_at DESC NULLS LAST,u.created_at DESC,u.id DESC LIMIT 1) AS turn_id
+           FROM tasks t WHERE t.owner_id=$1 AND t.state='open' AND t.next_check<=now()
+             AND (t.activity_key IS NULL OR NOT EXISTS (SELECT 1 FROM preferences p WHERE p.owner_id=t.owner_id AND p.proactive_paused))
+             AND EXISTS (SELECT 1 FROM turns u WHERE u.owner_id=t.owner_id AND u.session_id=t.session_id AND u.thread_id=$2)
+             AND NOT EXISTS (SELECT 1 FROM turns u WHERE u.owner_id=t.owner_id AND u.session_id=t.session_id
+               AND (u.status IN ('queued','running') OR (${waitingTurnSql('u')})))
+         )
+         UPDATE tasks t SET next_check=NULL FROM due WHERE t.id=due.id AND t.owner_id=$1
+         RETURNING due.id,due.turn_id,due.next_check`,
+        [ownerId, threadId],
+      );
+      for (const row of rows)
+        await resumeTurn(
+          row.turn_id,
+          `task-check:${row.id}:${row.next_check.getTime()}`,
+          "This task's planned check is due. Check what changed, then update or finish the task.",
+          false,
+          client,
         );
-        if (due.rowCount)
-          await resumeTurn(
-            row.turn_id,
-            `task-check:${row.id}:${row.next_check.getTime()}`,
-            "This task's planned check is due. Check what changed, then update or finish the task.",
-            false,
-            client,
-          );
-      }, pool);
-    if (rows.length) refresh();
+      return rows.length > 0;
+    }, pool);
+    if (resumed) refresh();
   }
 
   async function wakeDue() {
@@ -673,7 +690,7 @@ export function createTasks(options: {
     const requests = messages.filter(
       (message) =>
         !placeholders.has(message.text) &&
-        !personalSecret.test(message.text) &&
+        !personalSecret(message.text) &&
         !credentialUrl.test(message.text) &&
         classifyVerificationReply(message.text).kind === 'ordinary',
     );
@@ -712,7 +729,7 @@ export function createTasks(options: {
          WHERE u.task_id=$1 AND u.owner_id=$2 AND e.type IN ('step','tool_complete','tool_failed')
            AND NOT (e.type='tool_complete' AND e.summary='apps')
          UNION ALL
-         SELECT a.id,'action',a.action,NULL,NULL,NULL,a.created_at
+         SELECT a.id,'action',a.action,a.target,NULL,NULL,a.created_at
          FROM app_actions a JOIN turns u ON u.id=a.turn_id
          WHERE u.task_id=$1 AND u.owner_id=$2 AND a.owner_id=$2
          UNION ALL
@@ -724,8 +741,8 @@ export function createTasks(options: {
         )
       ).rows.map((event) => {
         if (event.type === 'action') {
-          const { app, label } = actionTitle(event.summary);
-          return { ...event, type: 'tool_complete', summary: app ? `${app}: ${label}` : label };
+          const { label, target } = recordedAction(event.summary, event.site);
+          return { ...event, type: 'tool_complete', summary: label, site: target ?? null };
         }
         return event.type === 'message' || event.type === 'step'
           ? event
@@ -813,13 +830,19 @@ export function createTasks(options: {
     };
   }
 
-  async function execute(turn: TurnRef, raw: unknown, sourceMessageId: string | null) {
+  async function execute(
+    turn: TurnRef,
+    raw: unknown,
+    sourceMessageId: string | null,
+    priorMessageId?: string,
+    priorHandoff?: boolean,
+  ) {
     const capture = snapshotAnalytics(options.analytics);
     const result = await transaction(async (client) => {
       await lockThread(client);
       return withTurnLock(
         turn.turnId,
-        () => act(client, turn, raw, sourceMessageId, capture),
+        () => act(client, turn, raw, sourceMessageId, capture, priorMessageId, priorHandoff),
         client,
       );
     }, pool);

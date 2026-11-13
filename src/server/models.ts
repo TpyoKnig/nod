@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -9,6 +9,7 @@ import type {
   ModelDefinition,
 } from '../ports/models.ts';
 import { ModelAuthError, ModelWorkspaceSelectionError } from '../ports/models.ts';
+import { ModelRequestError } from '../ports/agent.ts';
 import type { CredentialKeyStore } from '../ports/key-store.ts';
 import type {
   ModelMethod,
@@ -26,6 +27,7 @@ import {
   cloudflareGatewayPattern,
   lightestEffort,
   modelSource,
+  openAIRegions,
 } from '../shared/models.ts';
 import { signInPage } from '../shared/sign-in-page.ts';
 import { modelKeyError } from '../shared/model-keys.ts';
@@ -39,6 +41,8 @@ import { createDatabaseModelStore, type ModelRecord, type ModelState } from './m
 import { analyticsModel, snapshotAnalytics, type CaptureAnalytics } from './analytics.ts';
 import type { SettingActor } from './analytics-settings.ts';
 import { logFailure } from './failure-log.ts';
+import { modelQuotaFailure } from '../shared/model-quota.ts';
+import { createTextRedactor } from './redaction.ts';
 
 const keySchema = z
   .object({
@@ -60,7 +64,7 @@ export const modelSelectionInput = z
     effort: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
   })
   .strict();
-class ConnectionError extends Error {}
+class ConnectionError extends ModelRequestError {}
 
 function modelPricing(model: ModelDefinition): ModelChoice['pricing'] {
   if (model.choice.id === 'openrouter/auto') return 'variable';
@@ -115,6 +119,16 @@ export function modelKeyCredential(
     workspaceId?: string;
   },
 ): ModelCredential {
+  if (provider === 'openai') {
+    const region = settings.region || 'global';
+    if (!Object.hasOwn(openAIRegions, region))
+      throw new ConnectionError('Choose an OpenAI API region.');
+    return {
+      type: 'api_key',
+      key,
+      ...(region !== 'global' ? { region: region as keyof typeof openAIRegions } : {}),
+    };
+  }
   if (provider === 'anthropic') {
     const workspaceId = settings.workspaceId?.trim();
     if (workspaceId && (workspaceId.length > 100 || !/^[\x21-\x7e]+$/.test(workspaceId)))
@@ -167,6 +181,8 @@ function sameAccount(
 }
 
 function connectionLabel(provider: ModelProvider, method: ModelMethod, value: ModelCredential) {
+  if (provider === 'openai' && value.type === 'api_key' && value.region)
+    return `OpenAI · ${openAIRegions[value.region]}`;
   if (provider === 'anthropic' && value.type === 'api_key' && value.workspaceId)
     return value.workspaceId;
   if (value.type === 'oauth') return value.email ?? 'ChatGPT account';
@@ -258,6 +274,11 @@ export function createModelService(options: {
     keyStore: options.keyStore,
   });
   let analytics: CaptureAnalytics | undefined;
+  let requestBudget: ModelAccess['reserve'];
+  const reserve: NonNullable<ModelAccess['reserve']> = async (maximumUsd) => {
+    if (!requestBudget) throw new Error('The model request budget is not configured.');
+    return requestBudget(maximumUsd);
+  };
   function connectionChanged(
     provider: ModelProvider,
     method: ModelMethod,
@@ -328,7 +349,7 @@ export function createModelService(options: {
         : value.key
           ? [value.key]
           : []
-    ).filter((secret) => !secrets.has(secret));
+    ).filter((secret) => typeof secret === 'string' && secret.length > 0 && !secrets.has(secret));
     for (const secret of values) secrets.add(secret);
     if (values.length) for (const observer of observers) observer(values);
   }
@@ -336,7 +357,11 @@ export function createModelService(options: {
     const state = await store.read();
     rows = state.connections.map(({ credential: saved, ...row }) => {
       const value = row.managed ? options.bootstrap?.credentials[row.provider] : saved;
-      return value?.type === 'api_key' || value?.type === 'bedrock' || value?.type === 'cloudflare'
+      return value &&
+        typeof value === 'object' &&
+        'key' in value &&
+        typeof value.key === 'string' &&
+        value.key.length > 4
         ? { ...row, keyEnding: value.key.slice(-4) }
         : row;
     });
@@ -348,6 +373,67 @@ export function createModelService(options: {
     const value = row.managed ? options.bootstrap?.credentials[row.provider] : row.credential;
     if (value) remember(value);
     return value;
+  }
+  function requestAccess(
+    row: ModelRecord,
+  ): Pick<ModelAccess, 'read' | 'prepareRequest' | 'reserve'> {
+    const access = {
+      read: () => read(row.id),
+      reserve,
+    };
+    if (row.provider !== 'google') return access;
+    const tag = (value: ModelCredential | undefined) =>
+      value && createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    return {
+      ...access,
+      async prepareRequest(modelId, automatic) {
+        const credentialTag = tag(await read(row.id));
+        const pauses = rows.find((item) => item.id === row.id)?.requestPauses;
+        const pause =
+          Object.values(pauses ?? {}).find(
+            (item) => item.kind === 'credits_depleted' && item.credentialTag === credentialTag,
+          ) ?? pauses?.[modelId];
+        if (
+          automatic &&
+          pause &&
+          pause.credentialTag === credentialTag &&
+          (pause.retryAt === null || pause.retryAt > Date.now())
+        )
+          throw new ConnectionError(
+            `${row.provider} reported ${pause.kind === 'credits_depleted' ? 'depleted prepayment credits' : pause.kind === 'zero_quota' ? 'zero quota' : 'a daily quota limit'} for ${modelId}. Automatic requests are paused. Check this connection in Settings > Models or ask again to make a new request.`,
+          );
+        return async (error) => {
+          if (!credentialTag || closed || (!error && automatic)) return;
+          const failure = error ? modelQuotaFailure(error) : undefined;
+          if (error && !failure) return;
+          try {
+            await store.change((state) => {
+              const saved = state.connections.find((item) => item.id === row.id);
+              if (!saved || tag(credential(saved)) !== credentialTag) return;
+              saved.requestPauses ??= {};
+              if (failure)
+                saved.requestPauses[modelId] = {
+                  credentialTag,
+                  kind: failure.kind,
+                  retryAt:
+                    failure.kind === 'daily_quota' && failure.retryAfterMs
+                      ? Date.now() + failure.retryAfterMs
+                      : null,
+                };
+              else {
+                delete saved.requestPauses[modelId];
+                for (const [id, item] of Object.entries(saved.requestPauses))
+                  if (item.kind === 'credits_depleted' && item.credentialTag === credentialTag)
+                    delete saved.requestPauses[id];
+              }
+            });
+            await reload();
+          } catch (error) {
+            logFailure('model_quota_save_failed', error);
+          }
+        };
+      },
+    };
   }
   function apiKeyConnection(provider: ModelProvider) {
     const candidates = rows.filter(
@@ -491,14 +577,15 @@ export function createModelService(options: {
     value?: ModelCredential,
     rejected?: () => Promise<void>,
   ) {
+    if (value) remember(value);
     try {
       return await backend.catalog(provider, method, value);
     } catch (error) {
       if (error instanceof ModelAuthError && error.requiresReconnect) await rejected?.();
       throw new ConnectionError(
-        error instanceof ModelAuthError
-          ? error.message
-          : 'The model list couldn’t be loaded. Try again.',
+        createTextRedactor([...secrets])(
+          error instanceof Error ? error.message : String(error),
+        ).slice(0, 2000),
       );
     }
   }
@@ -563,6 +650,7 @@ export function createModelService(options: {
         models: working ? previous.models : definitions,
         managed,
         status: working ? 'connected' : status,
+        requestPauses: previous?.requestPauses,
         ...(!managed ? { credential: value } : {}),
       };
       state.connections = state.connections.flatMap((item) =>
@@ -580,6 +668,14 @@ export function createModelService(options: {
   function selectDefault(state: ModelState, row: ModelRecord) {
     const { provider, method, models: definitions, id, managed, status } = row;
     const choices = definitions.map((model) => model.choice);
+    const selected = state.selection;
+    const choice = choices.find((model) => model.id === selected?.modelId);
+    if (
+      selected?.connectionId === id &&
+      choice?.efforts.length &&
+      !choice.efforts.includes(selected.effort)
+    )
+      selected.effort = lightestEffort(choice.efforts);
     const configuredModel =
       managed && options.bootstrap?.provider === provider ? options.bootstrap.model : undefined;
     const preferred = configuredModel
@@ -802,9 +898,28 @@ export function createModelService(options: {
         provider:
           rows.find((row) => row.id === selection?.connectionId)?.provider ?? 'unconfigured',
         name: selection?.modelId ?? 'Unconfigured',
+        label:
+          rows
+            .find((row) => row.id === selection?.connectionId)
+            ?.models.find((model) => model.choice.id === selection?.modelId)?.choice.name ??
+          selection?.modelId,
         configured: service.configured,
         reconnect: rows.find((row) => row.id === selection?.connectionId)?.status === 'reconnect',
       };
+    },
+    async automaticRequestsAllowed() {
+      try {
+        for (const auxiliary of [false, true]) {
+          const access = await service.resolve(auxiliary);
+          await access.prepareRequest?.(
+            access.textModel?.definition.choice.id ?? access.definition.choice.id,
+            true,
+          );
+        }
+        return true;
+      } catch {
+        return false;
+      }
     },
     onSecrets(observer: (values: string[]) => void) {
       observers.add(observer);
@@ -1010,10 +1125,13 @@ export function createModelService(options: {
     hasApiKey(provider: ModelProvider) {
       return Boolean(apiKeyConnection(provider));
     },
-    async apiKey(provider: ModelProvider) {
+    async apiCredential(provider: ModelProvider) {
       const row = apiKeyConnection(provider);
       const value = row && (await read(row.id));
-      return value?.type === 'api_key' ? value.key : undefined;
+      return value?.type === 'api_key' ? value : undefined;
+    },
+    async apiKey(provider: ModelProvider) {
+      return (await service.apiCredential(provider))?.key;
     },
     hasImageModel() {
       return Boolean(imageModel());
@@ -1027,7 +1145,7 @@ export function createModelService(options: {
         method: row.method,
         definition,
         effort: lightestEffort(definition.choice.efforts),
-        read: () => read(row.id),
+        ...requestAccess(row),
         needsReconnect: (credential) => needsReconnect(row.id, { models: row.models, credential }),
       };
     },
@@ -1043,9 +1161,13 @@ export function createModelService(options: {
         method: row.method,
         definition,
         effort: lightestEffort(definition.choice.efforts),
-        read: () => read(row.id),
+        ...requestAccess(row),
         needsReconnect: (credential) => needsReconnect(row.id, { models: row.models, credential }),
       };
+    },
+    reserve,
+    setRequestBudget(reserve: NonNullable<ModelAccess['reserve']>) {
+      requestBudget = reserve;
     },
     async resolve(auxiliary = false): Promise<ModelAccess> {
       const selected = selection && { ...selection };
@@ -1059,7 +1181,7 @@ export function createModelService(options: {
           : undefined) ?? row.models.find((model) => model.choice.id === selected.modelId);
       if (!definition || (!definition.choice.efforts.includes(selected.effort) && !auxiliary))
         throw new ConnectionError(
-          'The selected model is unavailable. Choose another model in Settings > Models.',
+          `The selected model is unavailable on this connection (${row.provider} / ${selected.modelId}). Reload its models or choose another model in Settings > Models.`,
         );
       const companion = definition.choice.audio ? textCompanion(row) : undefined;
       if (definition.choice.audio && !companion) throw missingTextCompanion();
@@ -1081,7 +1203,7 @@ export function createModelService(options: {
               },
             }
           : {}),
-        read: () => read(row.id),
+        ...requestAccess(row),
         needsReconnect: (credential) => needsReconnect(row.id, { models: row.models, credential }),
       };
     },

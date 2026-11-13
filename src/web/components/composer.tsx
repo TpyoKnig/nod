@@ -14,6 +14,7 @@ import {
 } from './icons';
 import type { Artifact, Message } from '../../shared/contracts';
 import { fileBytes } from '../../shared/files';
+import { messageTextLimit, messageTooLongError } from '../../shared/message-limits';
 import { api, errorMessage } from '../lib/api';
 import { isEditingTarget, shortcutLabel } from '../lib/navigation';
 import { Tooltip } from './tooltip';
@@ -630,6 +631,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const sentAttachments = attachmentValues.current;
     const includesAudio = recorder.phase === 'recording' || Boolean(recorder.recording);
     if (!sentText && !sentAttachments.length && !includesAudio) return;
+    if (sentText.length > messageTextLimit) return;
     if (includesAudio) audioSend.current = true;
     const sequence = ++sends.current;
     pendingSends.current++;
@@ -735,6 +737,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   );
   const { setDrafts } = drawer;
   const hasRecording = recorder.phase !== 'idle';
+  const lengthError = text.length > messageTextLimit ? messageTooLongError : '';
   const showStop = Boolean(onStop && !text.trim() && !attachments.length && !hasRecording);
   function releaseRecording() {
     const press = recordingPress.current;
@@ -858,6 +861,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       : canRecord && !hasRecording
         ? 'Press and hold to record\nRight-click for microphone settings'
         : `${microphoneLabel}\nRight-click for microphone settings`);
+  const sendLabel = sendingAudio
+    ? 'Sending audio'
+    : hasRecording
+      ? 'Send audio message'
+      : 'Send message';
+  const sendDisabled =
+    !ready ||
+    Boolean(lengthError) ||
+    pendingUploads > 0 ||
+    recordingPending ||
+    sendingAudio ||
+    (!text.trim() && !attachments.length && !hasRecording);
   function retryAudio() {
     recorder.clearError();
     setShowAudioSetup(false);
@@ -869,7 +884,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [images, setDrafts]);
   return (
     <div className="composer-wrap">
-      {(error || audioSetupError) && <Notice>{error || audioSetupError}</Notice>}
+      {(lengthError || error || audioSetupError) && (
+        <Notice>{lengthError || error || audioSetupError}</Notice>
+      )}
       {replyTo && (
         <div className="reply-context composer-reply">
           <CornerUpLeft size={16} />
@@ -897,6 +914,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             size="icon"
             onClick={clearReply}
             aria-label="Cancel reply"
+            title="Cancel reply"
           >
             <X size={16} />
           </Button>
@@ -1022,14 +1040,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       </button>
                     </Tooltip>
                   )}
-                  <button
-                    type="button"
-                    className="composer-file-remove"
-                    onClick={() => removeAttachment(item)}
-                    aria-label={`Remove ${item.name}`}
-                  >
-                    <X size={14} />
-                  </button>
+                  <Tooltip content={`Remove ${item.name}`}>
+                    <button
+                      type="button"
+                      className="composer-file-remove"
+                      onClick={() => removeAttachment(item)}
+                      aria-label={`Remove ${item.name}`}
+                    >
+                      <X size={14} />
+                    </button>
+                  </Tooltip>
                   {uploading && (
                     <span
                       className={`composer-file-progress${item.state === 'queued' ? ' is-queued' : ''}`}
@@ -1174,39 +1194,32 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   : microphoneLabel}
               </span>
             </MicrophonePicker>
+            <span className="stop-slot">
+              {showStop && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="stop-button"
+                  aria-label="Stop all work"
+                  title="Stop all work"
+                  disabled={stopping}
+                  onClick={onStop}
+                >
+                  <Square size={16} solid />
+                </Button>
+              )}
+            </span>
             <Button
               ref={sendButton}
-              type={showStop ? 'button' : 'submit'}
+              type="submit"
               size="icon"
               className={`send-button${hasRecording ? ' send-audio-button' : ''}`}
-              onClick={showStop ? onStop : undefined}
-              title={showStop ? 'Stop Nod' : undefined}
-              aria-label={
-                showStop
-                  ? 'Stop all work'
-                  : sendingAudio
-                    ? 'Sending audio'
-                    : hasRecording
-                      ? 'Send audio message'
-                      : 'Send message'
-              }
-              disabled={
-                showStop
-                  ? stopping
-                  : !ready ||
-                    pendingUploads > 0 ||
-                    recordingPending ||
-                    sendingAudio ||
-                    (!text.trim() && !attachments.length && !hasRecording)
-              }
+              title={sendDisabled ? undefined : sendLabel}
+              aria-label={sendLabel}
+              disabled={sendDisabled}
             >
-              {showStop ? (
-                <Square size={14} solid />
-              ) : sendingAudio ? (
-                <LoaderCircle size={18} className="spin" />
-              ) : (
-                <ArrowUp size={18} />
-              )}
+              {sendingAudio ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}
             </Button>
           </div>
         </div>

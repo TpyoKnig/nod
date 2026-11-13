@@ -381,11 +381,26 @@ async function readDesktopSettings() {
   };
 }
 
+function windowsTitleBar(dark) {
+  return process.platform === 'win32'
+    ? {
+        titleBarStyle: 'hidden',
+        titleBarOverlay: {
+          color: dark ? '#191919' : '#fafafa',
+          symbolColor: dark ? '#fafafa' : '#191919',
+          height: 48,
+        },
+      }
+    : {};
+}
+
 function publishPreferences() {
   const value = publicPreferences();
   for (const window of [setupWindow, ...engineWindows]) {
     if (!window || window.isDestroyed()) continue;
     window.setBackgroundColor(value.resolvedTheme === 'dark' ? '#191919' : '#fafafa');
+    if (process.platform === 'win32')
+      window.setTitleBarOverlay(windowsTitleBar(value.resolvedTheme === 'dark').titleBarOverlay);
     window.webContents.send('nod:preferences', value);
   }
 }
@@ -726,6 +741,7 @@ function showSettings(section = 'general', loading = false) {
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#191919' : '#fafafa',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 20, y: 17 } } : {}),
+    ...windowsTitleBar(nativeTheme.shouldUseDarkColors),
     webPreferences: {
       preload: join(desktopRoot, 'preload', 'index.cjs'),
       ...rendererSecurity,
@@ -854,6 +870,7 @@ function showEngine({ focus = true } = {}) {
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#191919' : '#fafafa',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 20, y: 17 } } : {}),
+    ...windowsTitleBar(nativeTheme.shouldUseDarkColors),
     webPreferences: {
       preload: join(desktopRoot, 'preload', 'engine.cjs'),
       ...rendererSecurity,
@@ -1651,6 +1668,9 @@ function refreshUpdateMenu() {
           enabled: Boolean(updates?.ready) && !checkingUpdates,
           click: () => void checkForUpdates(true, true),
         },
+        ...(process.platform === 'win32'
+          ? [{ label: 'Replay onboarding…', click: replayOnboarding }]
+          : []),
         { type: 'separator' },
         { label: 'Quit Nod', click: () => app.quit() },
       ]),
@@ -2100,8 +2120,10 @@ async function startEngine({ runtime, signal, pending = false }) {
       showSettings('general', true);
     }
   });
-  const deadline = Date.now() + 120_000;
+  const started = Date.now();
+  const deadline = started + 120_000;
   let ready = false;
+  let lastFailure = 'none';
   while (Date.now() < deadline && engine === child && !signal.aborted) {
     try {
       const response = await engineRequest('/api/health');
@@ -2109,8 +2131,20 @@ async function startEngine({ runtime, signal, pending = false }) {
         ready = true;
         break;
       }
-    } catch {}
+      lastFailure = response.ok ? 'unexpected response' : `HTTP ${response.status}`;
+    } catch (error) {
+      lastFailure =
+        [error?.cause?.code, error?.code].find((code) => typeof code === 'string') ||
+        error?.name ||
+        'error';
+    }
     await new Promise((accept) => setTimeout(accept, 300));
+  }
+  if (!ready && engine === child && !signal.aborted && Date.now() >= deadline) {
+    const waited = ((Date.now() - started) / 1000).toFixed(1);
+    await writeDiagnostic(
+      `Background service health check timed out after ${waited}s. Engine process still running: yes. Last health check: ${lastFailure}. Engine reported its port: ${engineBound ? 'yes' : 'no'}.`,
+    ).catch(() => {});
   }
   if (!ready || engine !== child || signal.aborted) {
     await stopEngine();

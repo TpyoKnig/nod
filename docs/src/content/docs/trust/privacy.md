@@ -50,7 +50,7 @@ Nod:    Sends to [email]:
         anything is missing. [owner]
 ```
 
-The trace also includes Nod's instructions, the model name, token counts, and cost. Its ID changes every day and whenever Nod restarts.
+The trace also includes Nod's instructions, the model name, token counts, and cost. Its conversation ID changes after 30 minutes without a request to the model and whenever Nod restarts.
 
 "Jordi" is still there. Nod spots details by their shape, such as email addresses, phone numbers, and bank accounts. It also knows your name from your connected accounts. It can't spot every name in a sentence, so traces are pseudonymised, not anonymous.
 
@@ -85,11 +85,11 @@ Select **How Nod uses your data** next to the **Privacy & data** heading to see 
 
 ## Where your data lives
 
-|                 | Desktop app                                                                                                                | Source install                     | Self-hosted server                 |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ---------------------------------- |
-| Runs on         | A private virtual machine on your computer                                                                                 | Docker containers on your computer | Your server                        |
-| Data folder     | Mac: `~/Library/Application Support/nod/` and `~/.nod-desktop/`. Windows: `%APPDATA%\nod\` and the `nod-` WSL distribution | `.local/` and Docker volumes       | Docker volumes and its `.env` file |
-| Who can read it | You                                                                                                                        | You                                | Anyone who administers the server  |
+|                 | Desktop app                                                                                                                                                                                          | Source install                     | Self-hosted server                 |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ---------------------------------- |
+| Runs on         | A private virtual machine on your computer                                                                                                                                                           | Docker containers on your computer | Your server                        |
+| Data folder     | Mac: `~/Library/Application Support/nod/` and `~/.nod-desktop/`. Windows: `%APPDATA%\nod\` and the `nod-` WSL distribution. Linux Flatpak: `~/.var/app/io.n8n.Nod/config/nod/` and `~/.nod-desktop/` | `.local/` and Docker volumes       | Docker volumes and its `.env` file |
+| Who can read it | You                                                                                                                                                                                                  | You                                | Anyone who administers the server  |
 
 For what Nod stores and for how long, see the [Security review guide](/trust/security-review/#what-nod-stores).
 
@@ -109,6 +109,18 @@ For what Nod stores and for how long, see the [Security review guide](/trust/sec
 | Customer.io                         | An unverified onboarding email signup, the checkbox claim and receipt time, and fixed About you choices. n8n uses its Labs workspace in the US. Typed **Something else** answers do not go there.                                                            |
 
 Your model keys stay encrypted on your installation. They never enter a prompt, Nod's workspace, or its browser.
+
+### Composio Zero Data Retention
+
+**Nod's default app connection service uses Composio with Zero Data Retention (ZDR) enabled.** For covered calls, Composio does not write request arguments, response data, or error text to its execution logs. It still stores call metadata, such as the tool name, time, and status. It also stores the access tokens needed to keep your apps connected.
+
+ZDR covers eligible tool calls and proxy requests. Files, trigger events, and tool-search queries have separate retention rules. Composio removes staged upload and download files after 24 hours. Nod disables Composio's session sandbox. Model services, destination apps, and Nod's local data follow their own rules.
+
+ZDR applies to new covered calls and does not delete older logs. Calls through Composio Managed OAuth apps require Enterprise for ZDR coverage. See [Composio's ZDR coverage](https://docs.composio.dev/docs/security/zero-data-retention) for the full scope.
+
+ZDR does not limit the permissions you grant to an app. Nod's [trust check](/trust/approvals/) checks each app action against your words. If you use another connection service, its operator controls the Composio project and retention settings.
+
+For the other controls, see [How Nod protects app connections](/connect/apps/#how-nod-protects-app-connections).
 
 ## Feedback
 

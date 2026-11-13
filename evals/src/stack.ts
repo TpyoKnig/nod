@@ -23,6 +23,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const repository = resolve(here, '../..');
 export const appSource = process.env.NOD_EVAL_SOURCE || repository;
 
+export async function loadWaitingTurnSql(source: string): Promise<(alias: string) => string> {
+  const load = (path: string) =>
+    import(pathToFileURL(join(source, path)).href) as Promise<{
+      waitingTurnSql?: (alias: string) => string;
+    }>;
+  const current = existsSync(join(source, 'src/server/turn-chain.ts'))
+    ? await load('src/server/turn-chain.ts')
+    : undefined;
+  if (current?.waitingTurnSql) return current.waitingTurnSql;
+  if (source === repository)
+    throw new Error('The current source must export its waiting-turn rule.');
+  const legacy = await load('src/server/vault.ts');
+  return legacy.waitingTurnSql ?? ((alias) => `${alias}.status='waiting'`);
+}
+
 export type Provider = 'openai' | 'anthropic' | 'openrouter';
 
 export interface Model {
@@ -316,7 +331,9 @@ export async function startStack(options: {
       { createContainerBrowserComputer },
       { createDockerWorkspace },
       { createPublicLinkPreviewProvider },
-      { waitingTurnSql },
+      waitingTurnSql,
+      { createModelService },
+      { createPiModelBackend },
     ] = await Promise.all([
       load<typeof import('../../src/server/composition.ts')>('src/server/composition.ts'),
       load<typeof import('../../src/server/db.ts')>('src/server/db.ts'),
@@ -332,11 +349,28 @@ export async function startStack(options: {
       load<typeof import('../../src/providers/public-web/link-preview.ts')>(
         'src/providers/public-web/link-preview.ts',
       ),
-      load<{ waitingTurnSql?: (alias: string) => string }>('src/server/vault.ts'),
+      loadWaitingTurnSql(appSource),
+      load<typeof import('../../src/server/models.ts')>('src/server/models.ts'),
+      load<typeof import('../../src/providers/pi/models.ts')>('src/providers/pi/models.ts'),
     ]);
     databasePool = pool;
     const vaultKey = randomBytes(32);
     const sessionRoot = join(directory, '.local', 'sessions');
+    const models = createModelService({
+      database: pool,
+      ownerId: 'local-development',
+      keyStore: { id: 'isolated-memory', configured: true, getKey: async () => vaultKey },
+      backend: createPiModelBackend(),
+      origin: `http://localhost:${port}`,
+      bootstrap: {
+        provider: model.provider,
+        model: model.name,
+        credentials: {
+          [model.provider]: { type: 'api_key', key: model.apiKey },
+        },
+      },
+    });
+    await models.initialize();
     const computer = createContainerBrowserComputer({
       dataRoot: join(directory, '.local'),
       container: browserContainer,
@@ -346,12 +380,14 @@ export async function startStack(options: {
     application = await createApplication(
       {
         observations: options.observations,
+        models,
         observe: capture.observe,
         agent: capture.agent(
           createPiAgent({
             provider: model.provider,
             model: model.name,
             apiKey: model.apiKey,
+            resolve: () => models.resolve(),
             sessionRoot,
             ...(model.effort
               ? {
@@ -410,6 +446,8 @@ export async function startStack(options: {
                   'src/providers/decisions.ts',
                 )
               ).createDecisionModel({
+                reserve:
+                  'reserve' in models ? (maximumUsd) => models.reserve(maximumUsd) : undefined,
                 resolve: async () =>
                   typesafe
                     ? { provider: 'typesafe', key: typesafe }
@@ -420,11 +458,22 @@ export async function startStack(options: {
               }),
             }
           : {}),
-        memoryCurator: createPiMemoryCurator({ provider: model.provider, apiKey: model.apiKey }),
+        classificationCurator: createPiMemoryCurator({
+          provider: model.provider,
+          resolve: () => models.resolveClassification(),
+          configured: () => models.hasClassificationModel(),
+        }),
+        memoryCurator: createPiMemoryCurator({
+          provider: model.provider,
+          resolve: () => models.resolve(true),
+          configured: () => models.configured,
+        }),
         onboardingCurator: createPiMemoryCurator({
           provider: model.provider,
           apiKey: model.apiKey,
           model: model.name,
+          resolve: async () => ({ ...(await models.resolve()), effort: 'off' }),
+          configured: () => models.configured,
           lightest: true,
         }),
         linkPreviews: createPublicLinkPreviewProvider(),
@@ -432,6 +481,7 @@ export async function startStack(options: {
       },
       { heartbeat: false },
     );
+    application.app.addHook('onClose', () => models.close());
     await application.app.listen({ host: '127.0.0.1', port });
     const baseUrl = `http://localhost:${port}`;
     const cookie = `${accessCookie(port)}=${await accessKey(join(directory, '.local'))}`;
@@ -449,7 +499,7 @@ export async function startStack(options: {
         },
       },
       request: createStackRequest(baseUrl, cookie),
-      waiting: (alias) => waitingTurnSql?.(alias) ?? `${alias}.status='waiting'`,
+      waiting: waitingTurnSql,
       origin: baseUrl,
       directory,
       container,

@@ -5,6 +5,7 @@ import {
   type Context,
 } from '@earendil-works/pi-ai';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { retryAssistantCall } from '@earendil-works/pi-ai/utils/retry';
 import { createPiModelRuntime } from './models.ts';
 import type { ModelAccess } from '../../ports/models.ts';
 import { lightestEffort } from '../../shared/models.ts';
@@ -83,12 +84,17 @@ export function createPiMemoryCurator(options: {
   traces?: ModelTraces;
 }): MemoryCurator {
   let loaded: ReturnType<typeof load> | undefined;
-  async function load() {
+  async function load(automatic: boolean) {
     const access = await options.resolve?.();
     if (options.resolve && !access) throw new Error('The selected model is unavailable.');
     if (access)
+      await access.prepareRequest?.(
+        access.textModel?.definition.choice.id ?? access.definition.choice.id,
+        automatic,
+      );
+    if (access)
       return {
-        ...(await createPiModelRuntime(access)),
+        ...(await createPiModelRuntime(access, { automatic })),
         effort: access.effort,
         subscription: access.method === 'subscription',
       };
@@ -115,6 +121,7 @@ export function createPiMemoryCurator(options: {
       model,
       effort: options.lightest ? lightestEffort(getSupportedThinkingLevels(model)) : undefined,
       subscription: false,
+      requestFacts: undefined,
     };
   }
   return {
@@ -124,18 +131,21 @@ export function createPiMemoryCurator(options: {
     get configured() {
       return options.configured?.() ?? Boolean(options.apiKey);
     },
-    async curate({ task, instructions, input, images }, signal, report) {
+    async curate({ task, instructions, input, images, automatic = true }, signal, report) {
       signal?.throwIfAborted();
+      const bounded = task === 'classify' || task === 'attention';
       if (options.resolve) loaded = undefined;
-      loaded ??= load().catch((error) => {
+      loaded ??= load(automatic).catch((error) => {
         loaded = undefined;
         throw error;
       });
-      const { runtime, model, effort, subscription } = await loaded;
+      const { runtime, model, effort, subscription, requestFacts } = await loaded;
       const sessionId = ['opencode', 'opencode-go'].includes(model.provider)
         ? crypto.randomUUID()
         : undefined;
+      let attempt = 0;
       const complete = async () => {
+        attempt++;
         const context: Context = {
           systemPrompt: instructions,
           messages: [
@@ -163,18 +173,19 @@ export function createPiMemoryCurator(options: {
                 }
               : {}),
             signal: AbortSignal.any([
-              AbortSignal.timeout(task === 'classify' ? 10_000 : 45_000),
+              AbortSignal.timeout(bounded ? 10_000 : 45_000),
               ...(signal ? [signal] : []),
             ]),
-            maxTokens: task === 'classify' ? 512 : 8192,
+            maxTokens: bounded ? 512 : 8192,
             ...(sessionId ? { sessionId } : {}),
-            ...(task === 'classify' ? { maxRetries: 0, timeoutMs: 10_000 } : {}),
+            ...(bounded ? { maxRetries: 0, timeoutMs: 10_000 } : {}),
             reasoning: effort === 'off' ? undefined : effort,
           });
         } finally {
           const metrics = piUsageMetrics(reply?.usage);
           report?.({
             id: crypto.randomUUID(),
+            attempt,
             provider: reply?.provider ?? model.provider,
             model: reply?.model ?? model.id,
             durationMs: performance.now() - started,
@@ -194,21 +205,17 @@ export function createPiMemoryCurator(options: {
         if (!untraced.has(task) && options.traces?.active())
           options.traces.record(
             piModelTrace(
-              { model: target, context, message: reply, startedAt },
+              { model: target, context, message: reply, startedAt, request: requestFacts?.(reply) },
               { source: 'curator', task },
             ),
           );
         return reply;
       };
-      let reply = await complete();
-      for (
-        let attempt = 0;
-        attempt < (task === 'vision' || task === 'classify' ? 0 : 2) &&
-        reply.stopReason === 'error' &&
-        !signal?.aborted;
-        attempt++
-      )
-        reply = await complete();
+      const reply = await retryAssistantCall(
+        complete,
+        { enabled: task !== 'vision' && !bounded, maxRetries: 2, baseDelayMs: 250 },
+        signal,
+      );
       if (
         reply.stopReason === 'error' ||
         reply.stopReason === 'aborted' ||
@@ -217,7 +224,7 @@ export function createPiMemoryCurator(options: {
         const label =
           task === 'vision'
             ? 'The image model is unavailable.'
-            : task === 'classify'
+            : task === 'classify' || task === 'attention'
               ? 'The classification model is unavailable.'
               : task === 'review' || task === 'access'
                 ? 'The action review model is unavailable.'

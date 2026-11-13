@@ -4,10 +4,11 @@ import type {
   ModelMethod,
   ModelEffort,
   ModelWorkspace,
+  OpenAIRegion,
 } from '../shared/models.ts';
 
 export type ModelCredential =
-  | { type: 'api_key'; key: string; workspaceId?: string }
+  | { type: 'api_key'; key: string; workspaceId?: string; region?: OpenAIRegion }
   | { type: 'endpoint'; url: string; key?: string }
   | { type: 'bedrock'; key: string; region: string }
   | { type: 'cloudflare'; key: string; accountId: string; gatewayId?: string }
@@ -51,6 +52,10 @@ export interface ModelAccess {
   effort: ModelEffort;
   textModel?: { definition: ModelDefinition; effort: ModelEffort };
   read(): Promise<ModelCredential | undefined>;
+  reserve?(
+    maximumUsd: number | null | (() => number | null),
+  ): Promise<(spentUsd: number | null) => Promise<void>>;
+  prepareRequest?(modelId: string, automatic: boolean): Promise<(error?: string) => Promise<void>>;
   needsReconnect?(credential?: ModelCredential): Promise<void>;
 }
 

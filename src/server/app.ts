@@ -1,5 +1,11 @@
 import { presentationSchema, presentationText } from '../shared/presentation.ts';
-import { answerChoicesSchema } from '../shared/answer-choices.ts';
+import {
+  answerChoicesSchema,
+  questionAnswerSchema,
+  writtenAnswer,
+  type AnswerChoice,
+} from '../shared/answer-choices.ts';
+import { approvalContent, approvalTitle } from './action-presentation.ts';
 import Fastify, { type FastifyReply } from 'fastify';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
@@ -7,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { SpeechService } from './speech.ts';
 import { messageInput, registerAudioMessages } from './audio-messages.ts';
+import { messageTooLongError } from '../shared/message-limits.ts';
 import type { ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { pool } from './db.ts';
@@ -42,6 +49,7 @@ import { browserErrorMessage } from '../shared/browser-errors.ts';
 import { browserHandoffInputs } from '../shared/browser-handoff.ts';
 import type {
   Activity,
+  ApprovalState,
   Configuration,
   Message,
   MessageHistoryPage,
@@ -54,6 +62,12 @@ import { registerAnalyticsRoutes, snapshotAnalytics, type CaptureAnalytics } fro
 import { messagePreview } from './message-preview.ts';
 
 const messageFields = `m.id,m.role,m.text,CASE WHEN m.role='user' THEN m.display_text END AS "displayText",m.audio_caption AS "audioCaption",m.turn_id AS "turnId",m.created_at AS "createdAt",m.attachments,m.stream_id AS "streamId",m.reaction,m.assistant_reaction AS "assistantReaction",m.reply_to_message_id AS "replyToMessageId",m.suggestions,m.presentation,m.answer_choices AS "answerChoices",(${pendingAnswerChoicesSql}) AS "answerChoicesPending",
+ (m.role='user' AND (m.approval_answer IS NOT NULL OR (m.question_answer IS NOT NULL AND m.text<>'' AND jsonb_array_length(m.attachments)=0))) AS "cardAnswer",
+ CASE WHEN m.role='assistant' AND m.answer_choices IS NOT NULL THEN (SELECT json_build_object('answer',a.question_answer,'text',a.text) FROM messages a
+   WHERE a.reply_to_message_id=m.id AND a.owner_id=m.owner_id AND a.role='user' AND a.question_answer IS NOT NULL AND a.text<>'' AND jsonb_array_length(a.attachments)=0 ORDER BY a.created_at,a.id LIMIT 1) END AS "choiceAnswer",
+ CASE WHEN m.role='assistant' THEN (SELECT json_build_object('id',a.id,'status',a.status,'action',a.action,'args',a.args,'active',u.status IN ('running','waiting'),'executionActive',e.status IN ('queued','running','waiting')) FROM approvals a
+   JOIN turns u ON u.id=a.turn_id AND u.owner_id=a.owner_id LEFT JOIN turns e ON e.id=a.execution_turn_id AND e.owner_id=a.owner_id
+   WHERE a.confirmation_message_id=m.id AND a.owner_id=m.owner_id LIMIT 1) END AS "approval",
  CASE WHEN target.id IS NULL THEN NULL ELSE json_build_object('id',target.id,'role',target.role,'text',COALESCE(m.reply_quote,''),'isQuote',m.reply_quote IS NOT NULL) END AS "replyTo"`;
 const textMessageOptions = {
   bodyLimit: 8 * 1024 * 1024,
@@ -64,7 +78,47 @@ function visualText(presentation: unknown) {
   return visual.success ? presentationText(visual.data) : '';
 }
 
-function messageView(row: Message & { assistantReaction?: MessageReaction | null }): Message {
+type ApprovalRow = {
+  id: string;
+  status: string;
+  action: string;
+  args: unknown;
+  active: boolean;
+  executionActive: boolean | null;
+};
+type ChoiceAnswerRow = { answer: unknown; text: string };
+
+function approvalState(row: ApprovalRow): ApprovalState {
+  if (row.status === 'pending') return row.active ? 'pending' : 'expired';
+  if (row.status === 'confirmed') return row.executionActive ? 'working' : 'expired';
+  if (row.status === 'executing') return row.executionActive ? 'working' : 'uncertain';
+  if (row.status === 'completed') return 'done';
+  if (row.status === 'declined' || row.status === 'uncertain') return row.status;
+  return 'expired';
+}
+
+function choiceAnswerView(options: AnswerChoice[], row: ChoiceAnswerRow | null | undefined) {
+  const answer = questionAnswerSchema.safeParse(row?.answer);
+  if (!row || !answer.success) return undefined;
+  if (!('choiceIds' in answer.data)) return { choiceIds: [], text: row.text };
+  const { choiceIds, custom } = answer.data;
+  const text =
+    custom &&
+    writtenAnswer(
+      options.filter((option) => choiceIds.includes(option.id)),
+      row.text,
+    );
+  return { choiceIds, ...(text ? { text } : {}) };
+}
+
+type MessageRow = Omit<Message, 'approval' | 'choiceAnswer' | 'cardAnswer'> & {
+  assistantReaction?: MessageReaction | null;
+  approval?: ApprovalRow | null;
+  choiceAnswer?: ChoiceAnswerRow | null;
+  cardAnswer?: boolean | null;
+};
+
+function messageView(row: MessageRow): Message {
   const {
     assistantReaction,
     presentation,
@@ -72,12 +126,18 @@ function messageView(row: Message & { assistantReaction?: MessageReaction | null
     audioCaption,
     answerChoices,
     answerChoicesPending,
+    approval,
+    choiceAnswer,
+    cardAnswer,
     ...message
   } = row;
   const visual =
     message.role === 'assistant' ? presentationSchema.safeParse(presentation) : undefined;
   const choices =
     message.role === 'assistant' ? answerChoicesSchema.safeParse(answerChoices) : undefined;
+  const answered = choices?.success
+    ? choiceAnswerView(choices.data.options, choiceAnswer)
+    : undefined;
   return {
     ...message,
     ...(message.role === 'user' && typeof displayText === 'string' ? { displayText } : {}),
@@ -86,6 +146,18 @@ function messageView(row: Message & { assistantReaction?: MessageReaction | null
     ...(choices?.success
       ? { answerChoices: choices.data, answerChoicesPending: answerChoicesPending === true }
       : {}),
+    ...(answered ? { choiceAnswer: answered } : {}),
+    ...(approval
+      ? {
+          approval: {
+            id: approval.id,
+            state: approvalState(approval),
+            ...approvalTitle(approval.action),
+            ...approvalContent(approval.action, approval.args),
+          },
+        }
+      : {}),
+    ...(cardAnswer ? { cardAnswer: true as const } : {}),
     reactions: [
       ...(message.reaction ? [{ actor: 'user' as const, reaction: message.reaction }] : []),
       ...(assistantReaction ? [{ actor: 'assistant' as const, reaction: assistantReaction }] : []),
@@ -122,9 +194,7 @@ export interface AppDependencies {
 export async function createApp(dependencies: AppDependencies = {}) {
   const publicConfiguration = dependencies.configuration ?? configuration;
   const artifacts = dependencies.artifacts ?? localArtifacts;
-  async function messageViews(
-    rows: Array<Message & { assistantReaction?: MessageReaction | null }>,
-  ) {
+  async function messageViews(rows: MessageRow[]) {
     const replyIds = [
       ...new Set(
         rows.flatMap((row) => (row.replyTo && !row.replyTo.isQuote ? [row.replyTo.id] : [])),
@@ -191,6 +261,15 @@ export async function createApp(dependencies: AppDependencies = {}) {
         ? (error as Error & { statusCode?: number; retryable?: boolean; code?: string })
         : undefined;
     const status = error instanceof z.ZodError ? 400 : known?.statusCode || 500;
+    const messageTooLong =
+      (request.routeOptions.url === '/api/messages' ||
+        request.routeOptions.url === '/api/messages/audio') &&
+      (known?.code === 'message_too_long' ||
+        (error instanceof z.ZodError &&
+          error.issues.some(
+            (issue) =>
+              issue.code === 'too_big' && issue.path.length === 1 && issue.path[0] === 'text',
+          )));
     if (status >= 500)
       logFailure('request_failed', error, {
         method: request.method,
@@ -202,8 +281,10 @@ export async function createApp(dependencies: AppDependencies = {}) {
       ...(status === 409 && known?.code === 'question_unavailable'
         ? { code: 'question_unavailable' }
         : {}),
-      error:
-        error instanceof z.ZodError
+      ...(messageTooLong ? { code: 'message_too_long' } : {}),
+      error: messageTooLong
+        ? messageTooLongError
+        : error instanceof z.ZodError
           ? 'Check the supplied values.'
           : status < 500
             ? known?.message
@@ -428,10 +509,18 @@ export async function createApp(dependencies: AppDependencies = {}) {
           !value.questionAnswer ||
           (Boolean(value.replyToMessageId) && !value.verificationRequestId),
       )
+      .refine(
+        (value) =>
+          !value.approvalAnswer ||
+          (Boolean(value.replyToMessageId) &&
+            !value.questionAnswer &&
+            !value.verificationRequestId &&
+            value.attachmentIds.length === 0),
+      )
       .parse(request.body);
     const clientMessageId = input.clientMessageId ?? randomUUID();
     const verification =
-      input.questionAnswer && 'choiceIds' in input.questionAnswer
+      (input.questionAnswer && !('custom' in input.questionAnswer)) || input.approvalAnswer
         ? undefined
         : await dependencies.verification?.accept(input.text, {
             ...input,
@@ -468,6 +557,7 @@ export async function createApp(dependencies: AppDependencies = {}) {
         threadId: input.threadId,
         clientMessageId,
         questionAnswer: input.questionAnswer,
+        approvalAnswer: input.approvalAnswer,
         stopSignal: arrival,
       },
     );
@@ -591,7 +681,7 @@ export async function createApp(dependencies: AppDependencies = {}) {
     const latest = await pool.query(
       `SELECT left(COALESCE(m.text,u.prompt),100) AS title,u.status,COALESCE(e.created_at,u.created_at) AS "lastActivityAt"
        FROM turns u LEFT JOIN messages m ON m.id=u.message_id
-       LEFT JOIN LATERAL (SELECT created_at FROM turn_events WHERE turn_id=u.id AND type IN ('tool_start','tool_complete') AND summary='browser' ORDER BY created_at DESC LIMIT 1) e ON true
+       LEFT JOIN LATERAL (SELECT created_at FROM turn_events WHERE turn_id=u.id AND type IN ('tool_start','tool_complete') AND (summary='browser' OR summary LIKE 'browser %') ORDER BY created_at DESC LIMIT 1) e ON true
        WHERE u.owner_id=$1 AND u.thread_id=$2 AND u.session_id=$2 AND e.created_at IS NOT NULL
        ORDER BY e.created_at IS NULL,COALESCE(e.created_at,u.created_at) DESC LIMIT 1`,
       [ownerId, thread.id],

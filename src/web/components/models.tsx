@@ -20,6 +20,7 @@ import {
   modelProviderNames,
   modelProviders,
   modelSource,
+  openAIRegions,
 } from '../../shared/models';
 import { analyticsForCurrentSession } from '../lib/analytics';
 import {
@@ -241,6 +242,23 @@ export function CloudKeyFields({
   useEffect(() => {
     if (showWorkspace) setWorkspaceFallback(true);
   }, [showWorkspace, provider]);
+  if (provider === 'openai')
+    return (
+      <Field label="API region" hint="Match the region of your OpenAI API project.">
+        <select
+          className="input"
+          value={value.region || 'global'}
+          disabled={disabled}
+          onChange={(event) => onChange({ ...value, region: event.target.value })}
+        >
+          {Object.entries(openAIRegions).map(([region, name]) => (
+            <option key={region} value={region}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </Field>
+    );
   if (provider === 'anthropic')
     return showWorkspace || workspaceFallback || workspaces.length > 0 ? (
       <>
@@ -746,7 +764,8 @@ export function ModelSettings({ onDirtyChange }: { onDirtyChange?(dirty: boolean
                                 : 'Add key'}
                           </Button>
                         )}
-                        {(connection.status === 'loading' ||
+                        {(connection.status === 'connected' ||
+                          connection.status === 'loading' ||
                           (connection.managed && connection.status === 'reconnect')) && (
                           <Button
                             type="button"
@@ -760,7 +779,11 @@ export function ModelSettings({ onDirtyChange }: { onDirtyChange?(dirty: boolean
                               )
                             }
                           >
-                            {connection.status === 'loading' ? 'Load models' : 'Try again'}
+                            {connection.status === 'connected'
+                              ? 'Reload models'
+                              : connection.status === 'loading'
+                                ? 'Load models'
+                                : 'Try again'}
                           </Button>
                         )}
                         {!connection.managed && (

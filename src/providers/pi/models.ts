@@ -4,8 +4,10 @@ import {
   getSupportedThinkingLevels,
   getSystemMessageText,
   hasApi,
+  createAssistantMessageEventStream,
   type Api,
   type AssistantMessage,
+  type Context,
   type Model,
   type CredentialStore,
 } from '@earendil-works/pi-ai';
@@ -15,6 +17,7 @@ import { z } from 'zod';
 import { createRemoteJWKSet, customFetch, jwtVerify } from 'jose';
 import { ModelAuthError, ModelWorkspaceSelectionError } from '../../ports/models.ts';
 import { ElevenLabsConnectionError, readElevenLabsVoices } from '../elevenlabs/speech.ts';
+import { openAIBaseUrl, openAIRequestError } from '../openai/api.ts';
 import type {
   ModelAccess,
   ModelBackend,
@@ -29,11 +32,13 @@ import {
   type ModelMethod,
 } from '../../shared/models.ts';
 import { signInPage } from '../../shared/sign-in-page.ts';
-import type { PiModelCall } from './traces.ts';
+import type { PiModelCall, ModelRequestFacts } from './traces.ts';
 import type { AgentSessionOptions } from '../../ports/agent.ts';
 import type { ProviderUsageEvent } from '../../ports/provider-usage.ts';
 import { piUsageMetrics } from './usage.ts';
 import { audioUsage, nativeAudioRequest, readsNativeAudio } from './audio.ts';
+import { completeAssistantMessage } from './checkpoint.ts';
+import { modelServiceError } from '../model-error.ts';
 import {
   antLingModel,
   nativeAudioModel,
@@ -43,7 +48,17 @@ import {
   nativeCatalog,
 } from './model-catalog.ts';
 
-const localModelSilenceMs = 30 * 60_000;
+export const localModelSilenceMs = 30 * 60_000;
+
+function supportedModel(model: Model<Api>): Model<Api> {
+  if (model.provider === 'groq' && model.id.startsWith('qwen/'))
+    return { ...model, compat: { ...model.compat, supportsDeveloperRole: false } };
+  if (model.provider === 'openrouter' && model.id === 'xiaomi/mimo-v2.6-flash')
+    return { ...model, compat: { ...model.compat, supportsStrictMode: false } };
+  if (model.provider === 'openrouter' && model.id === 'openrouter/free')
+    return { ...model, thinkingLevelMap: { ...model.thinkingLevelMap, off: null } };
+  return model;
+}
 
 const resource = 'https://api.openai.com/v1';
 const issuer = 'https://auth.openai.com';
@@ -158,30 +173,9 @@ function entries<T>(value: unknown, schema: z.ZodType<T>) {
     });
 }
 
-async function modelListRestricted(response: Response) {
-  const reader = response.body?.getReader();
-  if (!reader) return false;
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.length;
-      if (bytes > 4096) return false;
-      chunks.push(value);
-    }
-    const body = z
-      .object({ error: z.union([z.string(), z.object({ message: z.string() })]) })
-      .parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-    const message = typeof body.error === 'string' ? body.error : body.error.message;
-    const scopes = [...message.matchAll(/\bMissing scopes:\s*([\s\S]*?)(?:\.(?=\s|$)|$)/g)];
-    return scopes.length === 1 && scopes[0][1].trim() === 'api.model.read';
-  } catch {
-    return false;
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
+function modelListRestricted(message = '') {
+  const scopes = [...message.matchAll(/\bMissing scopes:\s*([\s\S]*?)(?:\.(?=\s|$)|$)/g)];
+  return scopes.length === 1 && scopes[0][1].trim() === 'api.model.read';
 }
 
 const levels = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -205,10 +199,9 @@ function ollamaModel(show: z.infer<typeof ollamaShowSchema>) {
   const contextWindow = Math.min(trained ?? Infinity, configured ?? Infinity);
   const values = show.thinking?.values;
   const named = levels.filter((level) => values?.includes(level));
-  const thinkingLevelMap = !show.capabilities.includes('thinking')
-    ? undefined
-    : !values
-      ? { off: 'none' }
+  const thinkingLevelMap =
+    !show.capabilities.includes('thinking') || !values
+      ? undefined
       : named.length
         ? {
             off: values.includes(false) || values.includes('none') ? 'none' : null,
@@ -218,9 +211,9 @@ function ollamaModel(show: z.infer<typeof ollamaShowSchema>) {
           }
         : values.includes(true)
           ? {
-              off: 'none',
+              off: values.includes(false) ? 'none' : null,
               ...Object.fromEntries(
-                levels.map((level) => [level, level === 'high' ? 'high' : null]),
+                levels.map((level) => [level, level === 'high' ? 'true' : null]),
               ),
             }
           : undefined;
@@ -268,11 +261,12 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
       refreshOnCreate: false,
       allowModelNetwork: false,
     }));
-  async function jsonResponse(response: Response) {
-    if (!response.ok)
-      throw new Error(
-        'The model service rejected the request. Check the connection and account access.',
-      );
+  async function jsonResponse(
+    response: Response,
+    service = 'Model discovery',
+    secrets: string[] = [],
+  ) {
+    if (!response.ok) throw await modelServiceError(response, service, secrets);
     return response.json();
   }
   async function json(url: string, init: RequestInit = {}) {
@@ -304,6 +298,7 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
     return token;
   }
   function definition(model: Model<Api>): ModelDefinition {
+    model = supportedModel(model);
     return {
       choice: {
         id: model.id,
@@ -765,10 +760,15 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
       if (!modelProviders.includes(provider))
         throw new Error('This model provider is unavailable.');
       if (provider === 'compatible') return endpointCatalog(credential);
-      const local = assistantModels(
+      let local = assistantModels(
         provider === 'ant-ling' ? [antLingModel] : (await runtime()).getModels(provider),
       );
-      if (provider === 'openai' && method === 'api_key') local.push(nativeAudioModel);
+      if (provider === 'openai' && method === 'api_key') {
+        const baseUrl = openAIBaseUrl(
+          credential?.type === 'api_key' ? credential.region : undefined,
+        );
+        local = [...local, nativeAudioModel].map((model) => ({ ...model, baseUrl }));
+      }
       if (!credential) return local.map(definition);
       if (provider === 'amazon-bedrock') return bedrockCatalog(local, credential);
       if (provider === 'google-vertex') return vertexCatalog(local, credential);
@@ -784,7 +784,7 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
           ? 'https://openrouter.ai/api/v1/models'
           : provider === 'anthropic'
             ? 'https://api.anthropic.com/v1/models?limit=1000'
-            : `${resource}/models`;
+            : `${method === 'api_key' && credential.type === 'api_key' ? openAIBaseUrl(credential.region) : resource}/models`;
       const headers: Record<string, string> =
         provider === 'anthropic'
           ? {
@@ -796,6 +796,7 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
             }
           : { Authorization: `Bearer ${key}` };
       const accepted = async (response: Response) => {
+        if (provider === 'openai' && method === 'api_key') return response;
         if (provider === 'anthropic' && response.status === 400) {
           await response.body?.cancel();
           throw new AnthropicBadRequest(
@@ -845,15 +846,15 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
           redirect: 'error',
         }),
       );
-      if (
-        provider === 'openai' &&
-        method === 'api_key' &&
-        credential.type === 'api_key' &&
-        response.status === 403 &&
-        (await modelListRestricted(response))
-      )
-        return local.map(definition);
-      const data = await jsonResponse(response);
+      if (provider === 'openai' && method === 'api_key' && !response.ok) {
+        const error = await openAIRequestError(response, key);
+        if (response.status === 403 && modelListRestricted(error.reason))
+          return local.map(definition);
+        throw new ModelAuthError(error.message);
+      }
+      const data = await jsonResponse(response, `${modelProviderNames[provider]} model discovery`, [
+        key,
+      ]);
       if (provider !== 'openrouter') {
         const list = entries(
           method === 'subscription' ? data.models : data.data,
@@ -1024,11 +1025,41 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
   };
 }
 
+function portableToolCallIds(messages: Context['messages'], model: string): Context['messages'] {
+  const ids = new Map<string, string>();
+  return messages.map((message) => {
+    if (message.role === 'toolResult') {
+      const id = ids.get(message.toolCallId);
+      return id ? { ...message, toolCallId: id } : message;
+    }
+    if (message.role !== 'assistant') return message;
+    ids.clear();
+    if (message.model === model) return message;
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (part.type !== 'toolCall' || /^[A-Za-z0-9]{9}$/.test(part.id)) return part;
+        const id = createHash('sha256').update(part.id).digest('hex').slice(0, 9);
+        ids.set(part.id, id);
+        return { ...part, id };
+      }),
+    };
+  });
+}
+
 export async function createPiModelRuntime(
   access: ModelAccess,
-  trace?: (call: PiModelCall) => void,
-  readAudio?: AgentSessionOptions['readAudio'],
-  reportCacheUsage?: (usage: ProviderUsageEvent) => void,
+  {
+    trace,
+    readAudio,
+    reportCacheUsage,
+    automatic = false,
+  }: {
+    trace?: (call: PiModelCall) => void;
+    readAudio?: AgentSessionOptions['readAudio'];
+    reportCacheUsage?: (usage: ProviderUsageEvent) => void;
+    automatic?: boolean;
+  } = {},
 ) {
   const subscription = access.method === 'subscription';
   const provider = access.provider;
@@ -1128,7 +1159,7 @@ export async function createPiModelRuntime(
   runtime.registerProvider(provider, {
     models: [access.definition, ...(access.textModel ? [access.textModel.definition] : [])].map(
       ({ spec }) => ({
-        ...spec,
+        ...supportedModel(spec as unknown as Model<Api>),
         contextWindow: modelContextBudget(spec as unknown as Model<Api>).window,
       }),
     ) as unknown as ProviderModelConfig[],
@@ -1140,33 +1171,79 @@ export async function createPiModelRuntime(
   if (access.textModel && (!textModel || readsNativeAudio(textModel)))
     throw new Error('The text companion is unavailable. Refresh the model list.');
   const stream = runtime.streamSimple.bind(runtime);
+  const requestFacts = new WeakMap<AssistantMessage, ModelRequestFacts>();
   runtime.streamSimple = (model, context, options) => {
+    context = {
+      ...context,
+      messages: context.messages.map((message) =>
+        message.role === 'assistant' ? completeAssistantMessage(message) : message,
+      ),
+    };
     const audio = readsNativeAudio(model) ? nativeAudioRequest(context, readAudio) : undefined;
     const target = audio && !audio.active && textModel ? textModel : model;
     const usage = audio?.active ? audioUsage() : undefined;
-    const events = stream(target, audio?.context ?? context, {
+    const cacheWarm = options?.maxTokens === 1 && options.maxRetries === 0;
+    let phase: ModelRequestFacts['requestPhase'] = 'prepare';
+    let status: number | undefined;
+    let transportCause: string | undefined;
+    let completeRequest: ((error?: string) => Promise<void>) | undefined;
+    let settleBudget: ((spentUsd: number | null) => Promise<void>) | undefined;
+    const guardedFetch =
+      access.provider === 'compatible' ||
+      access.provider === 'radius' ||
+      access.provider === 'cloudflare-workers-ai' ||
+      access.provider === 'cloudflare-ai-gateway' ||
+      (access.provider === 'openai' && !subscription) ||
+      Boolean(usage);
+    const sent = audio?.context ?? context;
+    const replay =
+      access.provider === 'compatible'
+        ? { ...sent, messages: portableToolCallIds(sent.messages, target.id) }
+        : sent;
+    const upstream = stream(target, replay, {
       ...options,
       maxTokens:
         options?.maxTokens && target.maxTokens > 0
           ? Math.min(options.maxTokens, target.maxTokens)
           : options?.maxTokens,
       maxRetries: 0,
+      onResponse: async (response, model) => {
+        phase = 'response';
+        status = response.status;
+        await options?.onResponse?.(response, model);
+      },
+      onProviderStreamEvent: async (event, model) => {
+        phase = 'stream';
+        await options?.onProviderStreamEvent?.(event, model);
+      },
+      ...(target.provider === 'openrouter' && target.id === 'openrouter/free'
+        ? { reasoning: options?.reasoning ?? 'minimal' }
+        : {}),
       ...(target !== model
         ? { reasoning: access.textModel!.effort === 'off' ? undefined : access.textModel!.effort }
         : {}),
-      ...(access.provider === 'compatible' ||
-      access.provider === 'radius' ||
-      access.provider === 'cloudflare-workers-ai' ||
-      access.provider === 'cloudflare-ai-gateway'
+      ...(guardedFetch ||
+      (
+        [
+          'openai-completions',
+          'openai-responses',
+          'openai-codex-responses',
+          'azure-openai-responses',
+          'anthropic-messages',
+          'mistral-conversations',
+          'pi-messages',
+          'openrouter-images',
+        ] as const
+      ).some((api) => hasApi(target, api))
         ? {
-            fetch: (input: string | URL | Request, init?: RequestInit) => {
+            fetch: async (input: string | URL | Request, init?: RequestInit) => {
               const headers = new Headers(init?.headers);
               if (headers.get('authorization') === `Bearer ${keyless}`)
                 headers.delete('authorization');
-              return (options?.fetch ?? fetch)(input, {
+              phase = 'request';
+              const response = await (options?.fetch ?? fetch)(input, {
                 ...init,
-                headers,
-                redirect: 'error',
+                ...(guardedFetch ? { headers, redirect: 'error' } : {}),
                 ...(access.provider === 'compatible'
                   ? {
                       dispatcher: (endpointConnections ??= new Dispatcher1Wrapper(
@@ -1177,19 +1254,28 @@ export async function createPiModelRuntime(
                       )),
                     }
                   : {}),
-              } as RequestInit);
+              } as RequestInit).catch((error: unknown) => {
+                let cause = error;
+                for (let depth = 0; depth < 4 && cause instanceof Error; depth++) {
+                  const code = (cause as Error & { code?: unknown }).code;
+                  if (typeof code === 'string' && /^(?:E[A-Z_]+|UND_ERR_[A-Z_]+)$/.test(code))
+                    transportCause = code;
+                  cause = cause.cause;
+                }
+                throw error;
+              });
+              return usage ? usage.response(response) : response;
             },
           }
         : {}),
-      ...(usage
-        ? {
-            fetch: async (input: string | URL | Request, init?: RequestInit) =>
-              usage.response(await (options?.fetch ?? fetch)(input, init)),
-          }
-        : {}),
       onPayload: async (payload, target) => {
+        completeRequest = await access.prepareRequest?.(target.id, automatic || cacheWarm);
         const changed = await options?.onPayload?.(payload, target);
         const body = (changed ?? payload) as Record<string, unknown>;
+        if (access.provider === 'compatible' && target.thinkingLevelMap?.high === 'true') {
+          body.think = body.reasoning_effort !== 'none' || target.thinkingLevelMap.off === null;
+          delete body.reasoning_effort;
+        }
         if (access.provider === 'openrouter')
           body.provider = { require_parameters: true, allow_fallbacks: false };
         if (
@@ -1264,47 +1350,81 @@ export async function createPiModelRuntime(
         }
 
         const budget = modelContextBudget(target);
-        if (budget.compact) {
-          const available = budget.window - estimateModelTokens(body) - budget.margin;
-          if (available < 128)
-            throw new Error(
-              `This request does not fit the model's ${budget.window}-token context. Use a model with a larger context or a shorter request.`,
-            );
-          const output = Math.min(options?.maxTokens ?? budget.output, budget.output, available);
-          for (const field of ['max_tokens', 'max_completion_tokens', 'max_output_tokens'])
-            if (field in body) body[field] = output;
-          for (const [field, key] of [
-            ['generationConfig', 'maxOutputTokens'],
-            ['inferenceConfig', 'maxTokens'],
-          ] as const) {
-            const config = body[field];
-            if (config && typeof config === 'object')
-              (config as Record<string, unknown>)[key] = output;
-          }
+        const available = budget.window - estimateModelTokens(body) - budget.margin;
+        if (available < 128)
+          throw new Error(
+            `Context length exceeded: This request does not fit ${target.id}'s ${budget.window}-token context. Use a model with a larger context or a shorter request.`,
+          );
+        const output = Math.min(options?.maxTokens ?? budget.output, budget.output, available);
+        for (const field of ['max_tokens', 'max_completion_tokens', 'max_output_tokens'])
+          if (field in body) body[field] = output;
+        for (const [field, key] of [
+          ['generationConfig', 'maxOutputTokens'],
+          ['inferenceConfig', 'maxTokens'],
+        ] as const) {
+          const config = body[field];
+          if (config && typeof config === 'object')
+            (config as Record<string, unknown>)[key] = output;
         }
 
-        return audio?.active
-          ? audio.payload(body, options?.signal ?? AbortSignal.timeout(120000))
+        const prepared = audio?.active
+          ? await audio.payload(body, options?.signal ?? AbortSignal.timeout(120000))
           : body;
+        settleBudget = await access.reserve?.(() => {
+          const prices = target.cost;
+          return prices &&
+            [prices.input, prices.output, prices.cacheRead, prices.cacheWrite].every(
+              (price) => Number.isFinite(price) && price >= 0,
+            ) &&
+            Math.max(prices.input, prices.output, prices.cacheRead, prices.cacheWrite) > 0
+            ? (Buffer.byteLength(JSON.stringify(prepared)) *
+                Math.max(prices.input * 2, prices.cacheWrite, prices.cacheRead) +
+                output * prices.output) /
+                1_000_000
+            : null;
+        });
+        phase = 'payload';
+        return prepared;
       },
     });
-    const push = events.push.bind(events);
-    events.push = (event) => {
-      if (usage && (event.type === 'done' || event.type === 'error'))
-        usage.apply(event.type === 'done' ? event.message.usage : event.error.usage);
-      if (event.type === 'error')
-        Object.assign(
-          event.error,
-          JSON.parse(
-            JSON.stringify(event.error, (_key, value) => {
-              if (typeof value !== 'string') return value;
-              for (const secret of secrets) value = value.replaceAll(secret, '[redacted]');
-              return value;
-            }),
-          ),
-        );
-      push(event);
-    };
+    const events = createAssistantMessageEventStream();
+    void (async () => {
+      for await (const event of upstream) {
+        if (usage && (event.type === 'done' || event.type === 'error'))
+          usage.apply(event.type === 'done' ? event.message.usage : event.error.usage);
+        if (event.type === 'error')
+          Object.assign(
+            event.error,
+            JSON.parse(
+              JSON.stringify(event.error, (_key, value) => {
+                if (typeof value !== 'string') return value;
+                for (const secret of secrets) value = value.replaceAll(secret, '[redacted]');
+                return value;
+              }),
+            ),
+          );
+        if (event.type === 'error') {
+          const error = event.error;
+          error.errorMessage = `${error.errorMessage || 'The provider gave no reason.'}${status ? ` (HTTP ${status})` : ''}${transportCause ? ` (transport cause: ${transportCause})` : ''} [request phase: ${phase}]`;
+        }
+        if ((event.type === 'done' || event.type === 'error') && phase !== 'prepare') {
+          const message = event.type === 'done' ? event.message : event.error;
+          if (message.stopReason !== 'aborted' && !options?.signal?.aborted)
+            await completeRequest?.(
+              message.stopReason === 'error' ? message.errorMessage : undefined,
+            );
+        }
+        if (event.type === 'done' || event.type === 'error') {
+          const message = event.type === 'done' ? event.message : event.error;
+          await settleBudget?.(piUsageMetrics(message.usage).costUsd ?? null);
+          requestFacts.set(message, {
+            requestPhase: phase,
+          });
+        }
+        events.push(event);
+      }
+      events.end(await upstream.result());
+    })();
     if (reportCacheUsage && options?.maxTokens === 1 && options.maxRetries === 0) {
       const id = randomUUID();
       const started = performance.now();
@@ -1343,12 +1463,19 @@ export async function createPiModelRuntime(
       const startedAt = new Date().toISOString();
       void events
         .result()
-        .then((message) => trace({ model: target, context, message, startedAt }))
+        .then((message) =>
+          trace({ model: target, context, message, startedAt, request: requestFacts.get(message) }),
+        )
         .catch(() => {});
     }
     return events;
   };
   const model = runtime.getModel(provider, access.definition.choice.id);
   if (!model) throw new Error('The selected model is unavailable. Refresh the model list.');
-  return { runtime, model, textModel };
+  return {
+    runtime,
+    model,
+    textModel,
+    requestFacts: (message: AssistantMessage) => requestFacts.get(message),
+  };
 }

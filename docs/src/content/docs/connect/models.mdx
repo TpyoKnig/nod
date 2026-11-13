@@ -50,6 +50,16 @@ Select **Change** beside **Your model** to open **Choose a model**. Search by mo
 
 Select **Manage** beside a provider to see its accounts, add another connection or remove one. If a connection stops working, **Reconnect** restores a sign-in. For a key or server, add the details again; remove the old connection if you no longer need it. When it's the connection you selected, chat links to that screen.
 
+Select **Reload models** beside a connected account to load its current model list and controls. If the saved effort is no longer supported, Nod uses a supported effort for the same model. This also applies when you save the connection again. Reload an existing Ollama connection after an update to use its current thinking controls.
+
+NVIDIA reloads its hosted model list. A listed model can still require account access or an available route. A failed reload keeps the saved list and selection. If a successful reload removes your selected model, choose another model yourself.
+
+If a model request stops your task, the failure message links to **Settings > Models**. Use that link to check the connection or choose another model. The message keeps the provider's reason, including key, credit, quota, model access, and service errors. A daily quota error asks you to check the limit or choose another model and shows the provider's retry delay when supplied. A zero quota error asks you to check access or choose another model.
+
+After Google reports a daily or zero quota, Nod pauses automatic requests for that model on that connection. This includes background checks, background helpers, and cache warming. The pause survives a restart. Other connections stay available. You can still ask again, replace the key, or select another model. Helpers required by your new request can also run. A successful request you start clears the pause. A provider retry delay permits another automatic attempt after that delay; it does not promise a quota reset. Without a delay, automatic work stays paused until recovery. Reloading the model list does not prove that quota is available.
+
+If Google explicitly reports depleted prepayment credits, Nod pauses automatic requests for every model on that connection. You can still start a request yourself. A successful request you start clears this credit pause. An ordinary rate limit does not establish a credit problem.
+
 To change to an available model, you can also tell Nod which model and service to use. This works in Nod, Telegram, and WhatsApp. Nod changes the saved selection for the next turn. Connecting a new service or signing in again still needs the private flow in the app.
 
 <Tabs syncKey="model-service">
@@ -58,9 +68,14 @@ To change to an available model, you can also tell Nod which model and service t
 <Steps>
 
 1. Choose **OpenAI**, then **Use an API key**.
-2. Paste your key into **API key**, then select **Connect**.
+2. Set **API region** to the region of your OpenAI API project. Leave **Global** for a project without a regional restriction.
+3. Paste your key into **API key**, then select **Connect**.
 
 </Steps>
+
+For a project with EU data residency, choose **Europe (EEA + Switzerland)**. Nod uses `eu.api.openai.com` for that connection's model requests, speech, and OpenAI decision checks. It keeps the native OpenAI models and their settings.
+
+Each connection keeps its own region. Nod does not switch regions after a failed request. Regional model and feature availability depends on your OpenAI project. See [OpenAI data residency](https://developers.openai.com/api/docs/guides/your-data#data-residency-controls).
 
 </TabItem>
 <TabItem label="ChatGPT">
@@ -204,7 +219,7 @@ All the models from your connections appear in one searchable list, grouped by c
 
 OpenRouter models show input and output token prices beside each model name, in USD per million tokens. Prices can wrap to the next line on small screens. The list identifies free tokens and prices that vary by model. These are the rates from the last model list update. Actual charges can vary with routing, caching, context length, and extra services. See [OpenRouter's model pricing](https://openrouter.ai/docs/guides/overview/models#pricing-object).
 
-You can connect several accounts of one service, such as two ChatGPT accounts or a personal and a work API key. A ChatGPT connection shows the account's email. A key connection, including one an OpenRouter sign-in created, shows the key's last four characters, which the model never sees. Signing in again with an account you already connected, or adding the same key or server address to the same service again, updates that connection instead of adding another.
+You can connect several accounts of one service, such as two ChatGPT accounts or a personal and a work API key. A ChatGPT connection shows the account's email. A key connection, including one an OpenRouter sign-in created, shows only the last four characters of a key longer than four characters. Shorter keys stay hidden. The model never sees this display value. Signing in again with an account you already connected, or adding the same key or server address to the same service again, updates that connection instead of adding another.
 
 If your selected connection is removed or needs reconnecting, the next connection you add or reconnect in **Models** becomes your model. If only your model disappears from a working connection, Nod keeps your choice and asks you to choose another. Nod doesn't switch by itself after a failed request.
 
@@ -229,11 +244,13 @@ For a context window below 65,536 tokens, Nod uses short instructions and loads 
 
 Nod reserves space for the reply and starts history compaction earlier. It keeps your current request and rules complete. If a request still does not fit, Nod asks for a shorter request or a model with a larger context window. Large images and tool schemas can need a larger window. Token estimates cannot guarantee that every provider accepts a request.
 
+Switching to a model with a smaller window can reduce the older context before the next reply. The full chat stays saved, and Nod can search it when it needs earlier details. If an unfinished request alone exceeds the new window, choose a model with more context or reset the conversation.
+
 The same server checks still decide app actions, sign-ins and payments. A smaller context window does not change those checks. Model ability still affects whether Nod can complete a task.
 
 ## Decision checks
 
-Nod can use a decision model to check action permission, read confirmation replies, and check emails that give account access. Your selected model writes and checks confirmation questions. Nod selects each checker before its request. A failed check never switches models.
+Nod can use a decision model to check action permission, read confirmation replies, and check emails that give account access. The server formats confirmation questions from the frozen proposed action and arguments with fixed English framing; you can answer in any language. Nod selects each checker before its request. A failed check never switches models.
 
 ### Select the action checker
 
@@ -263,7 +280,7 @@ These keys can come from a connection other than your chat model. ChatGPT subscr
 NOD_TRUST_MODEL=decision
 ```
 
-There is no separate decision-model setting. Nod selects the model. Your selected chat model still writes and checks confirmation questions. This writing step is separate from action classification.
+There is no separate decision-model setting. Nod selects the model. The server formats confirmation questions from the frozen proposed action. The action and reply classifiers still use the selected trust mode.
 
 The gate receives the complete action, owner messages and rules. It receives no tool results or page text. It must preserve exact targets and terms. The server obtains a permission quote from the selected owner source and checks it against the original words. Choosing a source cannot authorize an action by itself.
 
@@ -357,13 +374,14 @@ Every service below supports environment setup. You can add several provider key
 
 Additional settings:
 
-| Service           | Settings                                                                                                                                                   |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anthropic         | `ANTHROPIC_WORKSPACE_ID`, required for organization keys that aren't limited to one workspace. Leave empty for keys limited to one workspace.              |
-| Amazon Bedrock    | `AWS_REGION`, such as `us-east-1`. Set `LLM_MODEL` to select a model or inference profile when several are available.                                      |
-| Azure OpenAI      | `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL`, the model ID your deployment runs. Set `AZURE_OPENAI_DEPLOYMENT` if the deployment has a different name. |
-| Cloudflare        | `CLOUDFLARE_ACCOUNT_ID`, the 32-character hexadecimal account ID. AI Gateway also requires `CLOUDFLARE_GATEWAY_ID`.                                        |
-| OpenAI-compatible | `OPENAI_COMPATIBLE_BASE_URL` and optional `OPENAI_COMPATIBLE_API_KEY`. Use `LLM_PROVIDER=compatible` for the initial choice.                               |
+| Service           | Settings                                                                                                                                                        |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenAI            | `OPENAI_API_REGION`: `global` by default. Use `eu` for Europe or `us` for the United States. Other regions: `au`, `ca`, `in`, `jp`, `sg`, `kr`, `ae`, and `gb`. |
+| Anthropic         | `ANTHROPIC_WORKSPACE_ID`, required for organization keys that aren't limited to one workspace. Leave empty for keys limited to one workspace.                   |
+| Amazon Bedrock    | `AWS_REGION`, such as `us-east-1`. Set `LLM_MODEL` to select a model or inference profile when several are available.                                           |
+| Azure OpenAI      | `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL`, the model ID your deployment runs. Set `AZURE_OPENAI_DEPLOYMENT` if the deployment has a different name.      |
+| Cloudflare        | `CLOUDFLARE_ACCOUNT_ID`, the 32-character hexadecimal account ID. AI Gateway also requires `CLOUDFLARE_GATEWAY_ID`.                                             |
+| OpenAI-compatible | `OPENAI_COMPATIBLE_BASE_URL` and optional `OPENAI_COMPATIBLE_API_KEY`. Use `LLM_PROVIDER=compatible` for the initial choice.                                    |
 
 Set the cloud provider's required fields before starting Nod. A Cloudflare gateway ID has one to 64 lowercase letters, digits, or hyphens, starting with a letter or digit. Both Cloudflare connections use the same account ID from `.env`; connections saved in **Models** can use separate accounts and gateways.
 
@@ -391,7 +409,7 @@ flowchart LR
   server -. no key .-> sandbox
 ```
 
-- Nod encrypts saved keys and sign-ins with the Vault key. macOS uses Keychain, the Windows app uses Windows DPAPI, and Linux source installs use a private file. The self-hosting stack generates `NOD_VAULT_KEY` in its private `.env`. See [Vault configuration](/deploy/configuration/#vault).
+- Nod encrypts saved keys and sign-ins with the Vault key. macOS uses Keychain, the Windows app uses Windows DPAPI, and the Linux Flatpak uses Secret Service. Linux source installs use a private file. The self-hosting stack generates `NOD_VAULT_KEY` in its private `.env`. See [Vault configuration](/deploy/configuration/#vault).
 - Nod checks credential storage before starting a connection. If storage is unavailable, check the Vault configuration, permissions and database connection, then try again.
 - Keys from `.env` stay in server memory and aren't copied into the database.
 - Each key goes only to its own service: Amazon Bedrock in the Region you entered, Google Vertex AI, or the Azure OpenAI endpoint you entered.

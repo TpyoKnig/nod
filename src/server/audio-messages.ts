@@ -13,6 +13,7 @@ import { SpeechSetupError } from './speech.ts';
 import type { SubmitMessageResponse } from '../shared/contracts.ts';
 import { classifyVerificationReply, securityCodeIn } from '../shared/verification-code.ts';
 import { questionAnswerSchema } from '../shared/answer-choices.ts';
+import { messageTextLimit, messageTooLongError } from '../shared/message-limits.ts';
 
 const audioMessageOptions = { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } };
 
@@ -20,13 +21,14 @@ export const messageInput = z
   .object({
     text: z
       .string()
-      .max(100_000)
+      .max(messageTextLimit)
       .transform((value) => (value.trim() ? value : ''))
       .default(''),
     displayText: z.string().max(1_000_000).optional(),
     attachmentIds: z.array(z.uuid()).default([]),
     replyToMessageId: z.uuid().optional(),
     questionAnswer: questionAnswerSchema.optional(),
+    approvalAnswer: z.object({ approvalId: z.uuid(), approved: z.boolean() }).strict().optional(),
     replyQuote: z.string().trim().min(1).max(4000).optional(),
     seenMessageId: z.uuid().optional(),
     clientMessageId: z.uuid().optional(),
@@ -115,10 +117,11 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
       if (!recording) throw invalid('Choose an audio recording.');
       const input = messageInput
         .extend({ clientMessageId: z.uuid(), threadId: z.uuid() })
+        .refine((value) => !value.approvalAnswer)
         .refine(
           (value) =>
             !value.questionAnswer ||
-            ('custom' in value.questionAnswer &&
+            (!('choiceIds' in value.questionAnswer) &&
               Boolean(value.replyToMessageId) &&
               !value.verificationRequestId),
         )
@@ -204,7 +207,8 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
       signal.throwIfAborted();
       const text = [input.text, transcript].filter(Boolean).join('\n\n');
       const displayText = input.displayText;
-      if (text.length > 100_000) throw invalid('Send a shorter voice message.');
+      if (text.length > messageTextLimit)
+        throw Object.assign(invalid(messageTooLongError), { code: 'message_too_long' });
       const codeLike =
         classifyVerificationReply(text).kind !== 'ordinary' || Boolean(securityCodeIn(text));
       let verificationRequestId = input.verificationRequestId;

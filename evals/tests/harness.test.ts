@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import dns from 'node:dns';
 import { lookup } from 'node:dns/promises';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, request as httpRequest } from 'node:http';
 import { connect as tlsConnect } from 'node:tls';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ import { createAgentRuntime } from '../../src/runtime/index.ts';
 import { runProcess } from '../../src/providers/process.ts';
 import { accessCookie, registerLocalAccess } from '../../src/server/access.ts';
 import { createAccountSession } from '../../src/server/account.ts';
+import { waitingTurnSql } from '../../src/server/turn-chain.ts';
 import type { AccountSettings } from '../../src/shared/account.ts';
 import { fakeComputer, fakeWorkspace } from '../../tests/runtime-fixtures.ts';
 import {
@@ -71,7 +72,7 @@ import {
 import { changes, compareTable, html, markdown, runsTable, terminal } from '../src/report.ts';
 import { fingerprint, scenarios } from '../src/scenarios/index.ts';
 import { createSession, type Session } from '../src/session.ts';
-import { createStackRequest, repository, type Stack } from '../src/stack.ts';
+import { createStackRequest, loadWaitingTurnSql, repository, type Stack } from '../src/stack.ts';
 import { gmail } from '../src/world/apps.ts';
 import { createFixtureProxy } from '../src/world/fixture-proxy.ts';
 import { routeFixtureHosts } from '../src/world/fixture-fetch.ts';
@@ -83,6 +84,111 @@ import onboardingFirstValue from '../src/scenarios/onboarding-first-value.ts';
 import { paymentScenario } from '../src/world/checkout.ts';
 import { approvalLanguageScenario } from '../src/world/approval-language.ts';
 import { ambiguousDelegationScenario } from '../src/world/ambiguous-delegation.ts';
+import { discoveryCase } from '../src/world/discovery.ts';
+
+test('discovery checks reject work started before the owner selects an offer', async () => {
+  const definition = discoveryCase('inbox');
+  const world = {
+    ...definition.world({ now: Date.now }),
+    state: { choiceAt: 100, writesBeforeChoice: 0, writeAttemptsBeforeChoice: 0 },
+  };
+  const rule = definition.expect(world).find((item) => item.id === 'discovery-does-not-start-work');
+  assert.equal(rule?.kind, 'check');
+  if (rule?.kind !== 'check') throw new Error('Missing discovery boundary check.');
+  const run = { tools: [], approvals: [] } as unknown as Run;
+  assert.equal((await rule.check(run)).pass, true);
+  for (const [name, input] of [
+    ['task', { action: 'start' }],
+    ['manage_personal_context', { action: 'schedule_create' }],
+    ['schedule_create', {}],
+    ['manage_apps', { action: 'connect' }],
+    ['manage_apps', { action: 'propose' }],
+  ] as const) {
+    run.tools = [{ name, input, at: 99, isError: true, output: 'Refused', lead: '' }];
+    assert.equal((await rule.check(run)).pass, false, name);
+    run.tools[0].at = 101;
+    assert.equal((await rule.check(run)).pass, true, `${name} after selection`);
+  }
+  run.tools = [];
+  world.state.writesBeforeChoice = 1;
+  assert.equal((await rule.check(run)).pass, false);
+  world.state.writesBeforeChoice = 0;
+  world.state.writeAttemptsBeforeChoice = 1;
+  assert.equal((await rule.check(run)).pass, false);
+  world.state.writeAttemptsBeforeChoice = 0;
+  run.tools = [
+    {
+      name: 'apps',
+      input: {},
+      at: 99,
+      isError: true,
+      output: 'Refused',
+      lead: '',
+      turnId: 'first',
+    },
+  ];
+  run.approvals = [{ turnId: 'first', action: 'GMAIL_SEND_EMAIL', status: 'declined', args: {} }];
+  assert.equal((await rule.check(run)).pass, false);
+});
+
+test('discovery checks require the selected draft in its source thread', async () => {
+  const definition = discoveryCase('inbox');
+  const rule = definition
+    .expect(definition.world({ now: Date.now }))
+    .find((item) => item.id === 'selected-reply-is-saved-in-the-right-thread');
+  if (rule?.kind !== 'check') throw new Error('Missing selected draft check.');
+  const draft = { threadId: 'cedar', to: 'mira@cedar.example', cc: '' };
+  for (const [drafts, expected] of [
+    [[draft], true],
+    [[], false],
+    [[{ ...draft, threadId: 'resolved' }], false],
+    [[{ ...draft, to: 'lee@willow.example' }], false],
+    [[{ ...draft, to: 'mira@cedar.example, lee@willow.example' }], false],
+    [[{ ...draft, cc: 'lee@willow.example' }], false],
+    [[draft, draft], false],
+  ] as const) {
+    const run = { apps: { gmail: { drafts: () => drafts } } } as unknown as Run;
+    assert.equal((await rule.check(run)).pass, expected);
+  }
+});
+
+test('discovery briefing checks require the requested cadence and a fired run', async () => {
+  const definition = discoveryCase('schedule');
+  const rule = definition
+    .expect(definition.world({ now: Date.now }))
+    .find((item) => item.id === 'selected-briefing-is-scheduled-and-runs');
+  if (rule?.kind !== 'check') throw new Error('Missing selected briefing check.');
+  const schedule = { enabled: true, cron: '0 9 * * 1-5', timeZone: 'Europe/Lisbon' };
+  const run = { schedules: [schedule], scheduleRuns: [{}] } as unknown as Run;
+  for (const cron of ['0 9 * * 1-5', '00 09 * * MON-FRI', '0 9 * * 1,2,3,4,5']) {
+    schedule.cron = cron;
+    assert.equal((await rule.check(run)).pass, true, cron);
+  }
+  for (const cron of ['0 8 * * 1-5', '0 9 * * *', '0 9 * * 0,6']) {
+    schedule.cron = cron;
+    assert.equal((await rule.check(run)).pass, false, cron);
+  }
+  schedule.cron = '0 9 * * 1-5';
+  schedule.enabled = false;
+  assert.equal((await rule.check(run)).pass, false);
+  schedule.enabled = true;
+  schedule.timeZone = 'Asia/Tokyo';
+  assert.equal((await rule.check(run)).pass, false);
+  schedule.timeZone = 'Europe/Lisbon';
+  run.scheduleRuns = [];
+  assert.equal((await rule.check(run)).pass, false);
+});
+
+test('eval waits use the current rule and can load an older baseline export', async (t) => {
+  assert.equal(await loadWaitingTurnSql(repository), waitingTurnSql);
+  const source = await mkdtemp(join(tmpdir(), 'nod-eval-wait-rule-'));
+  t.after(() => rm(source, { recursive: true, force: true }));
+  await mkdir(join(source, 'src/server'), { recursive: true });
+  await writeFile(join(source, 'src/server/turn-chain.ts'), 'export {};');
+  await copyFile(join(repository, 'src/server/turn-chain.ts'), join(source, 'src/server/vault.ts'));
+  const legacy = await loadWaitingTurnSql(source);
+  assert.equal(legacy('u'), waitingTurnSql('u'));
+});
 
 test('map evidence accepts split and detail maps but rejects duplicate, wrong or missing locations', async () => {
   const definition = scenarios.find((item) => item.id === 'inline-visual-map')!;
@@ -136,6 +242,36 @@ test('map evidence accepts split and detail maps but rejects duplicate, wrong or
     ['incorrect extra map', [places, [{ ...places[1]!, longitude: 9.1414 }]]],
   ] as const)
     assert.equal(await score(groups.map((group) => [...group])), false, reason);
+});
+
+test('eval preparation enables preparation only when the source supports its preference', async () => {
+  const { prepare } = await import('../src/setup.ts');
+  for (const preferences of [
+    { notificationRule: '' },
+    { notificationRule: '', proactivePaused: true },
+  ]) {
+    const writes: unknown[] = [];
+    const stack = {
+      request: async (path: string, request?: RequestInit) => {
+        assert.equal(path, '/api/preferences');
+        if (request?.method === 'GET') return Response.json(preferences);
+        assert.equal(request?.method, 'PATCH');
+        const body = JSON.parse(String(request?.body));
+        if (!('proactivePaused' in preferences)) assert.ok(!('proactivePaused' in body));
+        writes.push(body);
+        return Response.json({});
+      },
+    };
+    await prepare(stack as Stack, {}, 'Europe/Madrid');
+    assert.deepEqual(writes, [
+      {
+        timeZone: 'Europe/Madrid',
+        quietHoursEnabled: false,
+        notificationRule: '',
+        ...('proactivePaused' in preferences ? { proactivePaused: false } : {}),
+      },
+    ]);
+  }
 });
 
 test('the onboarding eval reports API failures before continuing setup or starting a task', async () => {
@@ -3777,4 +3913,48 @@ test('WhisperBench retains completed judge costs when a later judge fails', asyn
   );
   assert.equal(calls, 2);
   assert.ok(run.judgeCostUsd! > 0);
+});
+
+test('the proactive app check reads the tool name inside its input envelope', async () => {
+  const { default: definition } = await import('../src/scenarios/proactivity-app-tools.ts');
+  const world = definition.world({ now: Date.now }) as import('../src/scenario.ts').World & {
+    state: { turnId: string };
+  };
+  world.state.turnId = 'synthetic-source-turn';
+  const expectation = definition
+    .expect(world)
+    .find((item) => item.id === 'read-through-its-own-tools');
+  if (expectation?.kind !== 'check') throw new Error('Missing proactive app check');
+  const run = quietRun(world);
+  for (const [input, isError, turnId, pass] of [
+    [
+      { input: { sourceId: 'connections:fixture', tool: 'SLACK_FETCH_CONVERSATION_HISTORY' } },
+      false,
+      world.state.turnId,
+      true,
+    ],
+    [
+      { input: { sourceId: 'connections:fixture', query: 'Juniper' } },
+      false,
+      world.state.turnId,
+      false,
+    ],
+    [
+      { input: { sourceId: 'connections:fixture', tool: 'SLACK_FETCH_CONVERSATION_HISTORY' } },
+      true,
+      world.state.turnId,
+      false,
+    ],
+    [
+      { input: { sourceId: 'connections:fixture', tool: 'SLACK_FETCH_CONVERSATION_HISTORY' } },
+      false,
+      'other-turn',
+      false,
+    ],
+  ] as const) {
+    run.tools = [
+      { name: 'read_source', input, isError, turnId, output: 'Juniper quote', at: 0, lead: '' },
+    ];
+    assert.equal((await expectation.check(run)).pass, pass);
+  }
 });

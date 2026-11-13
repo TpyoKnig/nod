@@ -13,7 +13,14 @@ import { memoryObjectStore } from './fixtures/object-store.ts';
 import { createIntegrationFixture } from '../scripts/e2e-fixtures.ts';
 import { repair } from '../src/server/memory-lint.ts';
 import { applyOps } from '../src/server/memory-ops.ts';
-import { emptyTree, parse, render, type Entry, type Tree } from '../src/server/memory-tree.ts';
+import {
+  emptyTree,
+  parse,
+  render,
+  unsafe,
+  type Entry,
+  type Tree,
+} from '../src/server/memory-tree.ts';
 import type { MemoryCurator } from '../src/ports/memory-curator.ts';
 import { createMemoryService, importMemoryFile } from '../src/server/memory.ts';
 import { createHistorySearch } from '../src/server/history.ts';
@@ -412,14 +419,21 @@ test(
       });
       assert.equal(edited.statusCode, 200, edited.body);
       await ask('Export my synthetic statement once more.', [
-        skill({
-          action: 'save',
-          name: 'synthetic-portal-statement',
-          description: 'Use when exporting a statement from the synthetic portal.',
-          body: `1. ${marker}.`,
-        }),
+        skill(
+          {
+            action: 'save',
+            name: 'synthetic-portal-statement',
+            description: 'Use when exporting a statement from the synthetic portal.',
+            body: `1. ${marker}.`,
+          },
+          true,
+        ),
       ]);
       assert.ok((await view()).skills[0].edited);
+      assert.equal(
+        (await view()).skills[0].description,
+        'Use when exporting the synthetic portal statement.',
+      );
 
       const routineStart = 'Every weekday I review my synthetic project notes before lunch.';
       const startTurn = await ask(routineStart, [], '');
@@ -460,6 +474,22 @@ test(
       assert.ok(reviews.some((input) => input.includes('memory_forget')));
       assert.ok(reviews.every((input) => !input.includes(marker)));
       assert.ok(reviews.every((input) => !input.includes('synthetic-portal-statement')));
+
+      const dropped = await application.app.inject({
+        method: 'DELETE',
+        url: '/api/memory/skills/synthetic-portal-statement',
+        headers,
+      });
+      assert.equal(dropped.statusCode, 200);
+      await ask('Export my synthetic statement a third time.', [
+        skill({
+          action: 'save',
+          name: 'synthetic-portal-statement',
+          description: 'Use when exporting a statement from the synthetic portal.',
+          body: `1. ${marker}.`,
+        }),
+      ]);
+      assert.ok(!(await view()).skills[0].edited);
 
       whilePreparing = async () => {
         whilePreparing = undefined;
@@ -684,6 +714,26 @@ test('a full memory file sheds the oldest archive entries before refusing a save
   );
   assert.deepEqual(applied, []);
   assert.deepEqual(render(full), unchanged);
+});
+
+test('memory refuses card numbers and login links but keeps links with long numeric IDs', () => {
+  for (const text of [
+    'Pays with card 4111 1111 1111 1111.',
+    'Backup card 5555-5555-5555-4444',
+    'Amex 378282246310005',
+    'Old Visa 4222222222222',
+    'Old Visa 4222 2222 22222',
+    'Card 4111 1111 1111 1111 12/27',
+    'Ref 7 4111 1111 1111 1111',
+    'Dashboard at https://owner:example-pass@example.com/admin',
+  ])
+    assert.equal(unsafe(text), true, text);
+  for (const text of [
+    'Favourite thread: https://x.com/example/status/1987654321098765432',
+    'Talk recap: https://www.linkedin.com/feed/update/urn:li:activity:7254321098765432109/',
+    'Order 12345678901234 arrives Friday.',
+  ])
+    assert.equal(unsafe(text), false, text);
 });
 
 test('repair archives expired, stale and duplicate entries, keeps distinct numbers and never deletes', () => {
@@ -1037,6 +1087,64 @@ test('skill learning cannot commit across a memory clear', async () => {
     status: 'saved',
     name: 'synthetic-flow',
   });
+});
+
+test('an agent cannot overwrite a skill the owner edited', async () => {
+  const memory = createMemoryService({
+    pool: {
+      query: async () => ({ rows: [{ now: new Date().toISOString() }] }),
+    } as unknown as pg.Pool,
+    ownerId: 'skill-owner',
+    store: memoryObjectStore(),
+  });
+  let preparations = 0;
+  const curator: MemoryCurator = {
+    id: 'fixture',
+    configured: true,
+    curate: async (request) => {
+      preparations++;
+      const draft = (request.input as { draft: { description: string; body: string } }).draft;
+      return { skill: { description: draft.description, body: draft.body } };
+    },
+  };
+  const skills = createLearnedSkills({ memory, curator, builtIn: [], redact: (text) => text });
+  const save = (name: string, body: string) =>
+    skills.learn(
+      { action: 'save', name, description: 'Use when testing synthetic flows.', body },
+      randomUUID(),
+    );
+  const body = async (name: string) =>
+    (await memory.load()).skills.find((skill) => skill.name === name)?.body;
+
+  await save('owner-flow', 'Agent steps.');
+  await save('agent-flow', 'Agent steps.');
+  await skills.change('owner-flow', { body: 'Owner steps.' });
+  const prepared = preparations;
+
+  await assert.rejects(save('owner-flow', 'Agent rewrite.'), /owner edited/);
+  await assert.rejects(
+    skills.learn({ action: 'patch', name: 'owner-flow', old: 'Owner', new: 'Agent' }, randomUUID()),
+    /owner edited/,
+  );
+  assert.equal(preparations, prepared);
+  assert.equal(await body('owner-flow'), 'Owner steps.');
+  assert.ok((await memory.load()).skills.find((skill) => skill.name === 'owner-flow')?.edited);
+
+  assert.deepEqual(await save('agent-flow', 'Agent rewrite.'), {
+    status: 'updated',
+    name: 'agent-flow',
+  });
+  assert.deepEqual(
+    await skills.learn(
+      { action: 'patch', name: 'agent-flow', old: 'rewrite', new: 'patch' },
+      randomUUID(),
+    ),
+    { status: 'updated', name: 'agent-flow' },
+  );
+  assert.equal(await body('agent-flow'), 'Agent patch.');
+
+  await skills.change('owner-flow', { body: 'Owner steps again.' });
+  assert.equal(await body('owner-flow'), 'Owner steps again.');
 });
 
 test(
@@ -1582,6 +1690,7 @@ test('onboarding answers update memory and profile analytics while the updates e
     { roles: ['astronaut'], jobs: [] },
     { scope: 'work', roles: ['student'], jobs: [] },
     { scope: 'personal', roles: [], companySize: '2_10', jobs: [] },
+    { scope: 'personal', roles: ['agency'], whoFor: 'clients', jobs: [] },
     { scope: 'work', roles: [], whoFor: 'clients', jobs: [] },
     { scope: 'work', roles: ['agency', 'agency'], jobs: [] },
     { scope: 'work', roles: [], jobs: ['email', 'email'] },
@@ -1632,7 +1741,7 @@ test('onboarding answers update memory and profile analytics while the updates e
     payload: { scope: 'work', roles: [], jobs: [] },
   });
   assert.equal(failedAnalytics.statusCode, 502);
-  assert.match(failedAnalytics.json().error, /continue without sharing them/);
+  assert.match(failedAnalytics.json().error, /continue without retrying/);
   assert.equal(profiles.length, 6);
   profileAnalyticsFail = false;
   const retriedAnalytics = await app.inject({
@@ -1766,6 +1875,16 @@ test('onboarding answers update memory and profile analytics while the updates e
     ).statusCode,
     200,
   );
+  const personalBusiness = await app.inject({
+    method: 'POST',
+    url: '/api/onboarding/profile',
+    payload: { scope: 'personal', roles: ['agency'], jobs: [] },
+  });
+  assert.equal(personalBusiness.statusCode, 200);
+  assert.deepEqual(
+    (await notes()).map((entry) => entry.text),
+    ['Where they want Nod’s help: Mostly personal life. What they do: Agency.'],
+  );
 });
 
 test('updates email keeps fixed answers scoped to each submission across route instances', async (t) => {
@@ -1839,9 +1958,25 @@ test('updates email keeps fixed answers scoped to each submission across route i
     { ...fixed, roleText: 'Private synthetic role' },
     { ...fixed, onboarding_roles: ['engineering', 'engineering'] },
     { ...fixed, onboarding_who_for: 'clients' },
+    {
+      ...fixed,
+      onboarding_scope: 'personal',
+      onboarding_roles: ['agency'],
+      onboarding_who_for: 'clients',
+      onboarding_company_size: 'not_asked',
+    },
     { ...fixed, onboarding_company_size: 'not_asked' },
     { ...fixed, onboarding_scope: 'private answer' },
   ])
     assert.notEqual((await signup(invalid)).statusCode, 200);
   assert.equal(sent.length, 2);
+  const personalBusiness = {
+    ...fixed,
+    onboarding_scope: 'personal',
+    onboarding_roles: ['agency'],
+    onboarding_who_for: 'not_asked',
+    onboarding_company_size: 'not_asked',
+  };
+  assert.equal((await signup(personalBusiness)).statusCode, 200);
+  assert.deepEqual(sent[2], personalBusiness);
 });

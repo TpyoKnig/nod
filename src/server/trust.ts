@@ -115,7 +115,7 @@ export function createTrust(options: {
                  AND to_jsonb(u)->>'task_id'=$4::text) OR (NOT EXISTS (
                SELECT 1 FROM turns r WHERE r.owner_id=$1 AND r.message_id=messages.id
                  AND r.source_id LIKE 'reaction-reply:%')))
-             AND NOT ${withdrawnSql('messages')}
+             AND approval_answer IS NULL AND NOT ${withdrawnSql('messages')}
              AND (created_at>$5 OR id=ANY($3::uuid[])) AND text NOT IN (
              SELECT task->>'title' FROM messages offer, jsonb_array_elements(offer.suggestions->'tasks') task
              WHERE offer.owner_id=$1 AND offer.thread_id=$2 AND task->>'title' IS NOT NULL)),
@@ -284,7 +284,9 @@ export function createTrust(options: {
       rules || 'currentRules' in args
         ? `${checkInstructions}\n${rulesInstructions}`
         : checkInstructions;
+    let failed = false;
     const answer = await review(instructions, input, signal).catch((error: unknown) => {
+      failed = true;
       logFailure('trust_check_failed', error);
       return undefined;
     });
@@ -302,6 +304,12 @@ export function createTrust(options: {
       reviewedBasis?.kind !== 'read'
         ? undefined
         : reviewedBasis;
+    const verdict = (answer as { run?: unknown } | undefined)?.run;
+    if (!basis && !failed && verdict !== false)
+      logFailure('trust_check_unusable', {
+        name: 'TrustCheckUnusable',
+        code: reviewedBasis ? 'superseded' : verdict === true ? 'basis_rejected' : 'no_answer',
+      });
     if (basis) {
       const latest = await context();
       await withTurnLock(turn.turnId, async () => undefined);

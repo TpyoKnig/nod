@@ -86,6 +86,10 @@ let current: DateFormat = {
 };
 const listeners = new Set<() => void>();
 
+function browserTimeZone() {
+  return validTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? current.timeZone;
+}
+
 export function resolveBrowserRegion() {
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (!browserRegions.has(timeZone)) browserRegions.set(timeZone, timeZoneRegion(timeZone));
@@ -100,6 +104,10 @@ export function dateFormatFrom(
     hourCycle: preferences.hourCycle ?? 'auto',
     timeZone: validTimeZone(preferences.timeZone) ?? current.timeZone,
   };
+}
+
+export function browserDateFormat(format: DateFormat, timeZone = browserTimeZone()): DateFormat {
+  return { ...format, timeZone: validTimeZone(timeZone) ?? format.timeZone };
 }
 
 export function setDateFormat(preferences: Pick<Preferences, 'locale' | 'hourCycle' | 'timeZone'>) {
@@ -127,6 +135,12 @@ export function useDateFormat() {
     () => current,
     () => current,
   );
+}
+
+export function useBrowserDateFormat() {
+  const format = useDateFormat();
+  const timeZone = useSyncExternalStore(subscribe, browserTimeZone, browserTimeZone);
+  return browserDateFormat(format, timeZone);
 }
 
 export function useBrowserRegion() {
@@ -192,6 +206,10 @@ function clock(format: DateFormat) {
   return clockOptions(format.locale, format.hourCycle);
 }
 
+export function usesTwelveHourClock(format = current) {
+  return formatter(format, clock(format)).resolvedOptions().hour12 === true;
+}
+
 export function formatTime(
   value: string | number | Date,
   format = current,
@@ -208,6 +226,16 @@ export function formatClockTime(value: string, format = current) {
   if (!match) return value;
   return formatter(format, clock(format), 'UTC').format(
     Date.UTC(2000, 0, 1, Number(match[1]), Number(match[2])),
+  );
+}
+
+export function formatClockPeriod(value: string, format = current) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!match) return '';
+  return (
+    formatter(format, clock(format), 'UTC')
+      .formatToParts(Date.UTC(2000, 0, 1, Number(match[1]), Number(match[2])))
+      .find((part) => part.type === 'dayPeriod')?.value ?? ''
   );
 }
 

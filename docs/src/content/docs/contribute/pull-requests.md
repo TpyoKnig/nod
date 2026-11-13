@@ -37,7 +37,7 @@ The title matters beyond the check. Desktop release notes group merged changes b
 ## Prepare the pull request
 
 - **Keep it focused** on one change, and fill in the template.
-- **Explain why** the change is needed and how you tested it. Add screenshots or a short video for UI changes.
+- **Explain why** the change is needed and how you tested it. Add screenshots or a short video for UI changes. For a new feature, make a [feature video](/contribute/feature-videos/).
 - **Call out safety-sensitive changes.** Changes to approvals, the trust check, Vault, sign-in, the sandbox or owner isolation get a closer review and need tests.
 - **Keep secrets out.** No keys, credentials, real accounts or private content in code, tests, logs or screenshots.
 - **Follow the existing style.** Nod's code has no comments or JSDoc, and its docs use short, plain sentences.
@@ -65,7 +65,7 @@ Require **Conventional PR title** in the status checks for `main`. In the merge 
 
 ## From merge to release
 
-Merged changes reach desktop users in the next desktop release. A maintainer runs **Release desktop**, merges its version pull request, and CI publishes one GitHub release. Installed Mac and Windows apps then update on their own. See [Desktop releases](/contribute/desktop-releases/). Self-hosted servers follow the [server update procedure](/deploy/server-operations/); merging does not update a running server.
+Merged changes reach desktop users in the next desktop release. A maintainer runs **Release desktop**, merges its version pull request, and CI publishes one GitHub release. Installed Mac and Windows apps then update on their own. Linux x64 preview users install the next Flatpak bundle. See [Desktop releases](/contribute/desktop-releases/). Self-hosted servers follow the [server update procedure](/deploy/server-operations/); merging does not update a running server.
 
 ## Dependency updates
 

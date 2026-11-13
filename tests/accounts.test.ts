@@ -32,6 +32,55 @@ import { trustBasis, trustDecision } from '../src/server/trust-basis.ts';
 import { createTrust } from '../src/server/trust.ts';
 import { createTrustReview } from '../src/server/trust-review.ts';
 import { trustFacts } from '../src/server/trust-facts.ts';
+import {
+  createErrorRedactor,
+  createRedactor,
+  createTextRedactor,
+} from '../src/server/redaction.ts';
+
+test('decision reservations release only requests that did not reach dispatch', async () => {
+  for (const phase of ['before dispatch', 'provider error', 'transport error']) {
+    const controller = new AbortController();
+    const settled: Array<number | null> = [];
+    const usage: ProviderUsageEvent[] = [];
+    let calls = 0;
+    const model = createDecisionModel({
+      resolve: async () => ({ provider: 'openai', key: 'synthetic-decision-key' }),
+      reserve: async () => {
+        if (phase === 'before dispatch') controller.abort();
+        return async (cost) => {
+          settled.push(cost);
+        };
+      },
+      fetch: async () => {
+        calls++;
+        if (phase === 'transport error')
+          throw new Error('Synthetic connection lost after dispatch.');
+        return new Response('', { status: 503 });
+      },
+    });
+    await assert.rejects(
+      model.check(
+        {
+          instructions: 'Check synthetic access.',
+          input: {},
+          question: {
+            name: 'access',
+            choices: [
+              { value: false, description: 'Ordinary mail.' },
+              { value: true, description: 'Access secret.' },
+            ],
+          },
+        },
+        controller.signal,
+        (event) => usage.push(event),
+      ),
+    );
+    assert.equal(calls, phase === 'before dispatch' ? 0 : 1);
+    assert.deepEqual(settled, [phase === 'before dispatch' ? 0 : null]);
+    assert.equal(usage[0]?.costUsd, phase === 'before dispatch' ? 0 : null);
+  }
+});
 
 test('decision selection uses the LLM only when no decision connection is available', async () => {
   let resolutions = 0;
@@ -102,13 +151,46 @@ test('decision selection uses the LLM only when no decision connection is availa
   assert.equal(llm, 1);
 });
 
-test('About records only confirmed shared choices and clears them on failure', async (t) => {
+test('OpenAI decision failures keep the region and provider reason without exposing the key', async () => {
+  const key = 'fixture-decision-"key';
+  let calls = 0;
+  const decisions = createDecisionModel({
+    resolve: async () => ({ provider: 'openai', key, region: 'eu' }),
+    fetch: async (input, init) => {
+      calls++;
+      assert.equal(String(input), 'https://eu.api.openai.com/v1/decisions');
+      assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${key}`);
+      return Response.json(
+        { error: { message: `Synthetic project geography EU error ${key}` } },
+        { status: 401 },
+      );
+    },
+  });
+  await assert.rejects(
+    decisions.check({
+      instructions: 'Apply the synthetic rule.',
+      input: {},
+      question: { name: 'answer', choices: [{ value: false, description: 'Ask.' }] },
+    }),
+    (error: Error) => {
+      assert.match(error.message, /401/);
+      assert.match(error.message, /project geography EU/);
+      assert.ok(!error.message.includes(key));
+      assert.ok(!error.message.includes(JSON.stringify(key).slice(1, -1)));
+      return true;
+    },
+  );
+  assert.equal(calls, 1);
+});
+
+test('About accepts multiple choices and records only confirmed sharing', async (t) => {
   const { JSDOM } = await import('jsdom');
   const { act, createElement } = await import('react');
   const dom = new JSDOM('<!doctype html><div id="root"></div>', {
     url: 'https://nod.example.test/onboarding',
   });
   dom.window.HTMLElement.prototype.scrollIntoView = () => {};
+  Object.defineProperty(dom.window, 'matchMedia', { value: () => ({ matches: true }) });
   const globals = {
     window: dom.window,
     document: dom.window.document,
@@ -124,7 +206,7 @@ test('About records only confirmed shared choices and clears them on failure', a
   for (const [key, value] of Object.entries(globals))
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   const { createRoot } = await import('react-dom/client');
-  const root = createRoot(dom.window.document.getElementById('root')!);
+  let root = createRoot(dom.window.document.getElementById('root')!);
   t.after(async () => {
     await act(async () => root.unmount());
     dom.window.close();
@@ -133,23 +215,15 @@ test('About records only confirmed shared choices and clears them on failure', a
       else Reflect.deleteProperty(globalThis, key);
   });
   const { About } = await import('../src/web/pages/onboarding/steps/about.tsx');
-  const { readStored, writeStored } = await import('../src/web/pages/onboarding/storage.ts');
-  const profile = {
-    scope: 'work',
-    roles: ['engineering'],
-    companySize: '11_100',
-    jobs: ['research'],
-  };
-  writeStored('about', {
-    current: 'done',
-    seen: ['scope', 'roles', 'size', 'jobs'],
-    profile,
-    editing: null,
-  });
+  const { readStored } = await import('../src/web/pages/onboarding/storage.ts');
+  const { profileScopes, profileRoles, profileWhoFor, profileCompanySizes, profileJobs } =
+    await import('../src/shared/onboarding.ts');
   let status = 200;
   let shared = true;
-  t.mock.method(globalThis, 'fetch', async (path: RequestInfo | URL) => {
+  const submissions: { roles: string[]; jobs: string[] }[] = [];
+  t.mock.method(globalThis, 'fetch', async (path: RequestInfo | URL, options?: RequestInit) => {
     assert.equal(String(path), '/api/onboarding/profile');
+    submissions.push(JSON.parse(String(options?.body)));
     return Response.json(
       status === 200 ? { ok: true, shared } : { error: 'Could not share your choices.' },
       { status },
@@ -159,7 +233,7 @@ test('About records only confirmed shared choices and clears them on failure', a
   await act(async () =>
     root.render(
       createElement(About, {
-        arrived: 'back',
+        arrived: 'forward',
         quiet: true,
         onNext: () => completed++,
         onBack() {},
@@ -167,32 +241,90 @@ test('About records only confirmed shared choices and clears them on failure', a
       }),
     ),
   );
-  const next = dom.window.document.querySelector<HTMLButtonElement>('.ob-next');
-  assert.ok(next);
-  await act(async () => next.click());
+  const clickChoice = async (options: readonly { id: string }[], id: string) => {
+    const index = options.findIndex((option) => option.id === id);
+    assert.notEqual(index, -1);
+    const button = dom.window.document.querySelectorAll<HTMLButtonElement>(
+      '.ob-chips .ob-chip[aria-pressed]',
+    )[index];
+    assert.ok(button, id);
+    await act(async () => button.click());
+  };
+  const primary = async () => {
+    const button = dom.window.document.querySelector<HTMLButtonElement>('.ob-next');
+    assert.ok(button);
+    await act(async () => button.click());
+  };
+  const remount = async () => {
+    await act(async () => root.unmount());
+    root = createRoot(dom.window.document.getElementById('root')!);
+    await act(async () =>
+      root.render(
+        createElement(About, {
+          arrived: 'back',
+          quiet: true,
+          onNext: () => completed++,
+          onBack() {},
+          usageShared: true,
+        }),
+      ),
+    );
+  };
+  const workRoles = profileRoles.filter((option) => !('personal' in option));
+  await clickChoice(profileScopes, 'work');
+  await clickChoice(workRoles, 'agency');
+  await clickChoice(workRoles, 'engineering');
+  await primary();
+  await clickChoice(profileWhoFor, 'clients');
+  await clickChoice(profileCompanySizes, '2_10');
+  await clickChoice(profileJobs, 'email');
+  await clickChoice(profileJobs, 'meetings');
+  await primary();
+  assert.deepEqual(submissions[0]?.roles, ['agency', 'engineering']);
+  assert.deepEqual(submissions[0]?.jobs, ['email', 'meetings']);
+  assert.equal(submissions.length, 1);
   assert.equal(completed, 1);
-  assert.deepEqual(readStored('about-shared'), {
+  const sharedChoices = {
     onboarding_profile_completed: true,
     onboarding_scope: 'work',
-    onboarding_roles: ['engineering'],
-    onboarding_who_for: 'not_asked',
-    onboarding_company_size: '11_100',
-    onboarding_jobs: ['research'],
-  });
-  shared = false;
-  await act(async () => next.click());
-  assert.equal(readStored('about-shared'), null);
+    onboarding_roles: ['agency', 'engineering'],
+    onboarding_who_for: 'clients',
+    onboarding_company_size: '2_10',
+    onboarding_jobs: ['email', 'meetings'],
+  };
+  assert.deepEqual(readStored('about-shared'), sharedChoices);
+  assert.equal(readStored<{ current: string }>('about')?.current, 'done');
+  await remount();
+  await primary();
   assert.equal(completed, 2);
-  status = 502;
-  await act(async () => next.click());
-  assert.equal(readStored('about-shared'), null);
-  const continueAnyway = dom.window.document.querySelector<HTMLButtonElement>(
-    '.ob-footer-end button:not(.ob-next)',
-  );
-  assert.ok(continueAnyway);
-  await act(async () => continueAnyway.click());
+  assert.equal(submissions.length, 2);
+  assert.deepEqual(readStored('about-shared'), sharedChoices);
+  shared = false;
+  await primary();
   assert.equal(readStored('about-shared'), null);
   assert.equal(completed, 3);
+  status = 502;
+  await primary();
+  assert.equal(readStored('about-shared'), null);
+  const retry = dom.window.document.querySelector<HTMLButtonElement>(
+    '.ob-footer-end button:not(.ob-next)',
+  );
+  assert.ok(retry);
+  await act(async () => retry.click());
+  assert.equal(completed, 3);
+  assert.equal(submissions.length, 5);
+  await primary();
+  assert.equal(readStored('about-shared'), null);
+  assert.equal(completed, 4);
+  assert.equal(submissions.length, 5);
+  assert.equal(readStored<{ current: string }>('about')?.current, 'done');
+  status = 200;
+  shared = true;
+  await remount();
+  await primary();
+  assert.equal(completed, 5);
+  assert.equal(submissions.length, 5);
+  assert.equal(readStored('about-shared'), null);
 });
 
 test('Join sends fixed answers only with a matching confirmed share', async (t) => {
@@ -1636,7 +1768,7 @@ describe('account routes', () => {
     const delivered: ModelTrace[] = [];
     const traces = createModelTraces(async (trace) => {
       delivered.push(trace);
-    });
+    }, '0.3.0');
     traces.configure({
       secrets: ['fixture-model-key-8c41f2'],
       profile: async () => ({ names: ['Marta Vidal'], region: 'ES' }),
@@ -1651,12 +1783,12 @@ describe('account routes', () => {
         ...(payload ? { payload } : {}),
       });
     const turnId = '3f2a9c4e-8b1d-4f6a-9e2b-7c5d1a0f4e83';
-    const trace = (content: string): ModelTrace => ({
+    const trace = (content: string, minute = 0): ModelTrace => ({
       id: 'e2f062ac-4a2b-466b-9fe6-b85c4e49a3d9',
       name: 'marta.vidal@example.com',
       provider: 'fixture-model-key-8c41f2',
-      startedAt: '2026-10-19T10:00:00.000Z',
-      endedAt: '2026-10-19T10:00:01.000Z',
+      startedAt: `2026-10-19T10:${String(minute).padStart(2, '0')}:00.000Z`,
+      endedAt: `2026-10-19T10:${String(minute).padStart(2, '0')}:01.000Z`,
       messages: [
         { role: 'user', content },
         {
@@ -1707,7 +1839,7 @@ describe('account routes', () => {
     await settle(1);
     assert.equal(delivered.length, 1);
     const sent = JSON.stringify(delivered[0]);
-    const privateContent = [delivered[0].metadata.session_id, delivered[0].metadata.turn_id].reduce(
+    const privateContent = [delivered[0].metadata.thread_id, delivered[0].metadata.turn_id].reduce(
       (text, id) => text.replaceAll(id, '[id]'),
       sent,
     );
@@ -1733,19 +1865,23 @@ describe('account routes', () => {
       assert.ok(!privateContent.includes(value), value);
     assert.match(sent, /order 123456 on 2026-10-19/);
     assert.match(sent, /192\.168\.1\.1\.example/);
-    assert.deepEqual(Object.keys(delivered[0].metadata), ['session_id', 'turn_id']);
-    assert.match(delivered[0].metadata.session_id, /^[0-9a-f]{32}$/);
+    assert.deepEqual(Object.keys(delivered[0].metadata), ['turn_id', 'thread_id', 'app_version']);
+    assert.equal(delivered[0].metadata.app_version, '0.3.0');
+    assert.match(delivered[0].metadata.thread_id, /^[0-9a-f]{32}$/);
     assert.match(delivered[0].metadata.turn_id, /^[0-9a-f]{32}$/);
     assert.ok(!sent.includes('fixture-session') && !sent.toLowerCase().includes(turnId));
     assert.ok(sent.includes(`task ${delivered[0].metadata.turn_id}`));
     assert.ok(!sent.includes(homedir()) && sent.includes('~/Library/nod.json'));
-    traces.record(trace('A second request in the same conversation'));
+    traces.record(trace('A second request in the same conversation', 25));
     await settle(2);
-    assert.equal(delivered[1].metadata.session_id, delivered[0].metadata.session_id);
+    traces.record(trace('A request after a long pause', 57));
+    await settle(3);
+    assert.equal(delivered[1].metadata.thread_id, delivered[0].metadata.thread_id);
+    assert.notEqual(delivered[2].metadata.thread_id, delivered[1].metadata.thread_id);
     await request({ traces: false });
     traces.record(trace('After opting out'));
-    await settle(3);
-    assert.equal(delivered.length, 2);
+    await settle(4);
+    assert.equal(delivered.length, 3);
   });
 
   test('account changes require the same origin and owner and never accept provider or owner input', async (t) => {
@@ -2323,6 +2459,8 @@ test('server model credentials reject invalid destinations and cloud accounts be
   const { modelEnvironment } = await import('../src/server/composition.ts');
   const key = 'fixture-environment-key';
   const invalid: Record<string, string>[] = [
+    { OPENAI_API_KEY: key, OPENAI_API_REGION: 'eu.example.test' },
+    { OPENAI_API_KEY: key, OPENAI_API_REGION: '__proto__' },
     { AWS_BEARER_TOKEN_BEDROCK: key },
     { AWS_BEARER_TOKEN_BEDROCK: key, AWS_REGION: 'eu-west-1.example.test/path' },
     { AZURE_OPENAI_API_KEY: key },
@@ -2375,6 +2513,26 @@ test('server model credentials reject invalid destinations and cloud accounts be
       OPENAI_COMPATIBLE_API_KEY: key,
     }).credentials.compatible,
     { type: 'endpoint', url: 'http://192.168.1.5:8080/v1', key },
+  );
+});
+
+test('secret redaction keeps valid tokens when another token is missing', () => {
+  const secrets = [' fixture-access-token ', undefined, null, 42] as unknown as string[];
+  const text = createTextRedactor(secrets);
+  const error = createErrorRedactor(secrets);
+  const redact = createRedactor(secrets);
+  assert.equal(text('Using fixture-access-token.'), 'Using [redacted].');
+  assert.equal(error('Failed for fixture-access-token.'), 'Failed for [redacted].');
+  assert.equal(
+    JSON.stringify(redact({ detail: 'fixture-access-token' })),
+    '{"detail":"[redacted]"}',
+  );
+  secrets.push('fixture-refresh-token', undefined as unknown as string);
+  assert.equal(text('fixture-access-token fixture-refresh-token'), '[redacted] [redacted]');
+  assert.equal(error('fixture-refresh-token'), '[redacted]');
+  assert.equal(
+    JSON.stringify(redact({ detail: 'fixture-refresh-token' })),
+    '{"detail":"[redacted]"}',
   );
 });
 
@@ -2436,6 +2594,172 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
       idToken: 'fixture-id-token',
     };
   }
+
+  test('OpenAI connections keep their regions through selection, refresh and restart', async (t) => {
+    const f = await fixture(t);
+    const { createPiModelBackend } = await import('../src/providers/pi/models.ts');
+    const { keyConnection, noKeySettings } = await import('../src/web/hooks/use-models.ts');
+    const key = 'fixture-regional-openai-key';
+    const requests: string[] = [];
+    const backend = createPiModelBackend({
+      fetch: async (input, init) => {
+        requests.push(String(input));
+        assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${key}`);
+        return Response.json({
+          data: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-audio-1.5'].map((id) => ({ id })),
+        });
+      },
+    });
+    const owner = await f.create('fixture-openai-region-owner', backend);
+    const app = Fastify();
+    owner.register(app);
+    t.after(() => app.close());
+    for (const region of ['global', 'eu']) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/models/keys',
+        payload: keyConnection('openai', key, { ...noKeySettings, region }),
+      });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.ok(!response.body.includes(key));
+    }
+    assert.equal(owner.view().connections.length, 2);
+    const eu = owner.view().connections.find((row) => row.label.includes('Europe'))!;
+    assert.ok(eu);
+    await owner.select({ connectionId: eu.id, modelId: 'gpt-6.1-sol', effort: 'high' });
+    assert.equal((await owner.resolve()).definition.spec.baseUrl, 'https://eu.api.openai.com/v1');
+    assert.equal(
+      (await owner.resolve(true)).definition.spec.baseUrl,
+      'https://eu.api.openai.com/v1',
+    );
+    assert.deepEqual(await owner.apiCredential('openai'), { type: 'api_key', key, region: 'eu' });
+    await owner.refreshCatalog(eu.id);
+    await owner.select({ connectionId: eu.id, modelId: 'gpt-audio-1.5', effort: 'off' });
+    const audio = await owner.resolve();
+    assert.equal(audio.textModel?.definition.spec.baseUrl, 'https://eu.api.openai.com/v1');
+    const restored = await f.create('fixture-openai-region-owner', backend);
+    assert.deepEqual(await restored.apiCredential('openai'), {
+      type: 'api_key',
+      key,
+      region: 'eu',
+    });
+    assert.equal(
+      (await restored.resolve()).definition.spec.baseUrl,
+      'https://eu.api.openai.com/v1',
+    );
+    await restored.addKey('openai', key, { region: 'eu' });
+    assert.equal(restored.view().connections.length, 2);
+    const other = await f.create('fixture-openai-other-owner', backend);
+    assert.equal(await other.apiCredential('openai'), undefined);
+    const rows = (await f.database.query('SELECT * FROM model_connections')).rows;
+    assert.ok(!JSON.stringify(rows).includes(key));
+    assert.deepEqual(requests, [
+      'https://api.openai.com/v1/models',
+      'https://eu.api.openai.com/v1/models',
+      'https://eu.api.openai.com/v1/models',
+      'https://eu.api.openai.com/v1/models',
+    ]);
+  });
+
+  test('incomplete saved credentials do not break redaction for the selected connection', async (t) => {
+    const f = await fixture(t);
+    const ownerId = 'fixture-incomplete-subscription';
+    const owner = await f.create(ownerId);
+    await owner.addKey('openai', 'fixture-selected-model-key');
+    const { createDatabaseModelStore } = await import('../src/server/model-store.ts');
+    const store = createDatabaseModelStore({
+      database: f.database,
+      ownerId,
+      keyStore: f.keyStore,
+    });
+    await store.initialize();
+    const { idToken: _, ...saved } = subscriptionCredential();
+    await store.change((state) => {
+      state.connections.push({
+        id: randomUUID(),
+        provider: 'openai',
+        method: 'subscription',
+        label: 'Synthetic older subscription',
+        status: 'reconnect',
+        models: [],
+        managed: false,
+        credential: saved as import('../src/ports/models.ts').ModelCredential,
+      });
+      for (const [type, provider] of [
+        ['api_key', 'openai'],
+        ['endpoint', 'compatible'],
+        ['bedrock', 'amazon-bedrock'],
+        ['cloudflare', 'cloudflare-workers-ai'],
+        ['azure', 'azure'],
+      ] as const)
+        for (const key of [undefined, null, 42, '', 'a', 'ab', 'abc', 'abcd'])
+          state.connections.push({
+            id: randomUUID(),
+            provider,
+            method: 'api_key',
+            label: 'Synthetic incomplete key',
+            status: 'reconnect',
+            models: [],
+            managed: false,
+            credential: {
+              type,
+              key,
+            } as unknown as import('../src/ports/models.ts').ModelCredential,
+          });
+      for (const [provider, credential] of [
+        [
+          'compatible',
+          { type: 'endpoint', url: 'http://127.0.0.1:1/v1', key: 'fixture-endpoint-key-ab12' },
+        ],
+        [
+          'azure',
+          {
+            type: 'azure',
+            url: 'https://fixture.example.test/openai/v1',
+            model: 'fixture-model',
+            deployment: 'fixture-deployment',
+            key: 'fixture-azure-key-cd34',
+          },
+        ],
+      ] as const)
+        state.connections.push({
+          id: randomUUID(),
+          provider,
+          method: 'api_key',
+          label: `Synthetic keyed ${credential.type}`,
+          status: 'reconnect',
+          models: [],
+          managed: false,
+          credential,
+        });
+    });
+    const restored = await f.create(ownerId);
+    assert.ok(
+      restored
+        .view()
+        .connections.filter((row) => row.label === 'Synthetic incomplete key')
+        .every((row) => row.keyEnding === undefined),
+    );
+    for (const [label, ending] of [
+      ['Synthetic keyed endpoint', 'ab12'],
+      ['Synthetic keyed azure', 'cd34'],
+    ])
+      assert.equal(
+        restored.view().connections.find((row) => row.label === label)?.keyEnding,
+        ending,
+      );
+    const secrets: string[] = [];
+    restored.onSecrets((values) => secrets.push(...values));
+    assert.equal(
+      createTextRedactor(secrets)('Using fixture-selected-model-key and fixture-access.'),
+      'Using [redacted] and [redacted].',
+    );
+    assert.ok(secrets.every((secret) => typeof secret === 'string' && secret.length > 0));
+    assert.deepEqual(await (await restored.resolve()).read(), {
+      type: 'api_key',
+      key: 'fixture-selected-model-key',
+    });
+  });
 
   function stubSignIn(
     exchange: () => Promise<import('../src/ports/models.ts').ModelCredential>,
@@ -2665,6 +2989,221 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     assert.deepEqual(removed.view(), { connections: [], selection: null });
     await assert.rejects(removed.resolve());
     for (const access of captured) assert.equal(await access.read(), undefined);
+  });
+
+  test('model refresh and saved connections repair unsupported efforts and keep valid selections', async (t) => {
+    const f = await fixture(t);
+    const definition = (await f.backend.catalog('openrouter', 'api_key')).find(
+      (model) => model.choice.id === 'openrouter/free',
+    )!;
+    let updated = false;
+    let empty = false;
+    const owner = await f.create('fixture-refreshed-effort', {
+      ...f.backend,
+      catalog: async () => [
+        {
+          ...definition,
+          choice: {
+            ...definition.choice,
+            efforts: empty ? [] : updated ? ['minimal', 'low', 'medium', 'high'] : ['off', 'high'],
+          },
+        },
+      ],
+    });
+    const id = await owner.addKey('openrouter', 'fixture-refreshed-key');
+    for (const replace of [
+      () => owner.refreshCatalog(id),
+      () => owner.addKey('openrouter', 'fixture-refreshed-key'),
+    ]) {
+      updated = false;
+      await replace();
+      await owner.select({ connectionId: id, modelId: 'openrouter/free', effort: 'off' });
+      updated = true;
+      await replace();
+      assert.deepEqual(owner.view().selection, {
+        connectionId: id,
+        modelId: 'openrouter/free',
+        effort: 'minimal',
+      });
+      assert.equal((await owner.resolve()).effort, 'minimal');
+      await owner.select({ connectionId: id, modelId: 'openrouter/free', effort: 'high' });
+      await replace();
+      assert.equal((await owner.resolve()).effort, 'high');
+    }
+    empty = true;
+    await owner.refreshCatalog(id);
+    assert.equal(owner.view().selection?.effort, 'high');
+    await assert.rejects(owner.resolve());
+  });
+
+  test('daily Google quota stops automatic requests across restart and keeps owner recovery available', async (t) => {
+    const f = await fixture(t);
+    const { createPiMemoryCurator } = await import('../src/providers/pi/memory-curator.ts');
+    const { createPiModelRuntime } = await import('../src/providers/pi/models.ts');
+    const definitions = await f.backend.catalog('google', 'api_key');
+    const definition = definitions.find((item) => item.choice.id === 'gemini-3.8-flash')!;
+    const primary = {
+      ...definition,
+      choice: { ...definition.choice, id: 'fixture-google-primary', name: 'Synthetic primary' },
+      spec: { ...definition.spec, id: 'fixture-google-primary' },
+    };
+    const backend = {
+      ...f.backend,
+      catalog: async () =>
+        [definition, primary].map((item) => ({
+          ...item,
+          spec: {
+            ...item.spec,
+            api: 'openai-completions',
+            baseUrl: 'https://model.example/v1',
+          },
+        })),
+    };
+    let service = await f.create('fixture-quota-owner', backend);
+    await assert.rejects(service.reserve(1), /budget is not configured/);
+    service.setRequestBudget(async () => async () => {});
+    const connectionId = await service.addKey('google', 'fixture-quota-key');
+    const other = await f.create('fixture-other-quota-owner', backend);
+    await other.addKey('google', 'fixture-other-quota-key');
+    const original = globalThis.fetch;
+    t.after(() => {
+      globalThis.fetch = original;
+    });
+    let calls = 0;
+    let rejected = true;
+    let quotaId = 'GenerateRequestsPerDayPerProjectPerModel-FreeTier';
+    let quotaValue = '20';
+    let prepaid = false;
+    globalThis.fetch = async (input) => {
+      assert.ok(String(input).startsWith('https://model.example/'));
+      calls++;
+      if (rejected)
+        return Response.json(
+          {
+            error: {
+              code: prepaid ? 402 : 429,
+              message: prepaid ? 'Your prepayment credits are depleted.' : 'Quota exceeded.',
+              ...(prepaid ? { status: 'RESOURCE_EXHAUSTED' } : {}),
+              details: prepaid
+                ? []
+                : [
+                    {
+                      quotaId,
+                      quotaValue,
+                      retryDelay: '82800.5s',
+                    },
+                  ],
+            },
+          },
+          { status: prepaid ? 402 : 429 },
+        );
+      return new Response(
+        'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"{\\"ready\\":true}"}}]}\n\ndata: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { headers: { 'content-type': 'text/event-stream' } },
+      );
+    };
+    const curator = createPiMemoryCurator({ provider: 'google', resolve: () => service.resolve() });
+    const request = {
+      task: 'plan' as const,
+      instructions: 'Prepare the synthetic task.',
+      input: {},
+    };
+    await assert.rejects(curator.curate(request), /quota/i);
+    assert.equal(calls, 1);
+    const selection = service.view().selection!;
+    await service.select({ ...selection, modelId: primary.choice.id });
+    assert.equal(await service.automaticRequestsAllowed(), false);
+    await service.select(selection);
+    await assert.rejects(curator.curate(request), /Automatic requests are paused/);
+    assert.equal(calls, 1);
+    await service.refreshCatalog(connectionId);
+    await assert.rejects(curator.curate(request), /Automatic requests are paused/);
+    await service.close();
+    service = await f.create('fixture-quota-owner', backend);
+    service.setRequestBudget(async () => async () => {});
+    await assert.rejects(curator.curate(request), /Automatic requests are paused/);
+    assert.equal(calls, 1);
+    assert.doesNotMatch(
+      JSON.stringify(service.view()),
+      /credentialTag|requestPauses|fixture-quota-key/,
+    );
+    await (await other.resolve()).prepareRequest?.(definition.choice.id, true);
+    rejected = false;
+    const access = await service.resolve();
+    const { runtime, model } = await createPiModelRuntime(access);
+    assert.equal(
+      (
+        await runtime.completeSimple(model, {
+          messages: [{ role: 'user', content: 'Try the synthetic task again.', timestamp: 1 }],
+        })
+      ).stopReason,
+      'stop',
+    );
+    assert.deepEqual(await curator.curate(request), { ready: true });
+    assert.equal(calls, 3);
+    assert.equal(service.view().selection?.connectionId, connectionId);
+    rejected = true;
+    quotaId = 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier';
+    await assert.rejects(curator.curate(request), /quota/i);
+    assert.equal(calls, 4);
+    assert.equal(await service.automaticRequestsAllowed(), true);
+    quotaValue = '0';
+    await assert.rejects(curator.curate(request), /quota/i);
+    assert.equal(calls, 5);
+    assert.equal(await service.automaticRequestsAllowed(), false);
+    await assert.rejects(curator.curate(request), /zero quota/);
+    assert.equal(calls, 5);
+    const ledger = createLedger({
+      pool: { query: async () => ({ rows: [] }) } as never,
+      ownerId: 'fixture-quota-owner',
+    });
+    const scoped = ledger.curator(curator);
+    await assert.rejects(
+      ledger.withTurn(randomUUID(), () => scoped.curate(request)),
+      /zero quota/,
+    );
+    rejected = false;
+    assert.deepEqual(
+      await ledger.withTurn(randomUUID(), () => scoped.curate(request), false, false),
+      { ready: true },
+    );
+    assert.equal(calls, 6);
+    assert.equal(await service.automaticRequestsAllowed(), true);
+    rejected = prepaid = true;
+    await assert.rejects(curator.curate(request), /prepayment credits are depleted/);
+    assert.equal(calls, 7);
+    await service.close();
+    service = await f.create('fixture-quota-owner', backend);
+    service.setRequestBudget(async () => async () => {});
+    await service.select({ ...selection, modelId: primary.choice.id });
+    const paused = await service.resolve();
+    await assert.rejects(
+      paused.prepareRequest!(primary.choice.id, true),
+      /prepayment credits.*Automatic requests are paused/,
+    );
+    assert.equal(await service.automaticRequestsAllowed(), false);
+    assert.equal(calls, 7);
+    rejected = false;
+    const recovered = await createPiModelRuntime(paused);
+    assert.equal(
+      (
+        await recovered.runtime.completeSimple(recovered.model, {
+          messages: [
+            { role: 'user', content: 'Check the repaired synthetic account.', timestamp: 2 },
+          ],
+        })
+      ).stopReason,
+      'stop',
+    );
+    assert.equal(calls, 8);
+    assert.equal(await service.automaticRequestsAllowed(), true);
+    const concurrent = await service.resolve();
+    const ownerCompleted = await concurrent.prepareRequest!(primary.choice.id, false);
+    const automaticCompleted = await concurrent.prepareRequest!(definition.choice.id, true);
+    await automaticCompleted('Your prepayment credits are depleted.');
+    assert.equal(await service.automaticRequestsAllowed(), false);
+    await ownerCompleted();
+    assert.equal(await service.automaticRequestsAllowed(), true);
   });
 
   test('model setup chooses capable defaults, preserves explicit choices and requires valid cloud accounts', async (t) => {
@@ -5670,6 +6209,8 @@ describe('persisted setting analytics privacy', { skip: !process.env.TEST_DATABA
     const { createPreferencesStore } = await import('../src/server/preferences.ts');
     const f = await fixture(t);
     const preferences = createPreferencesStore(f.database, f.owner, f.analytics.forOwner(f.owner));
+    await preferences.update({ proactivePaused: false });
+    f.captured.length = 0;
     const privatePatch = {
       notificationRule: 'Synthetic private notification rule',
       rules: 'Synthetic private standing rule',
@@ -5747,8 +6288,14 @@ describe('persisted setting analytics privacy', { skip: !process.env.TEST_DATABA
       { setting: 'monthly_spending_limit', actor: 'agent', state: 'configured' },
       { setting: 'task_spending_limit', actor: 'agent', state: 'configured' },
     ]);
+    await ledger.setLimits({ preparationUsd: 3.17 }, 'owner');
+    assert.deepEqual(f.changes().at(-1), {
+      setting: 'preparation_spending_limit',
+      actor: 'owner',
+      state: 'configured',
+    });
     const count = f.changes().length;
-    await ledger.setLimits({ monthlyUsd: 37.42, taskUsd: 8.53 });
+    await ledger.setLimits({ monthlyUsd: 37.42, taskUsd: 8.53, preparationUsd: 3.17 });
     await assert.rejects(ledger.setLimits({ monthlyUsd: -1 }));
     assert.equal(f.changes().length, count);
     await ledger.setLimits({ monthlyUsd: null, taskUsd: null });

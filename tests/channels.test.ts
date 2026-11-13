@@ -610,6 +610,8 @@ test(
           let downloads = 0;
           let logouts = 0;
           let failSend = false;
+          let failConnect = false;
+          let blockedSave: Promise<void> | undefined;
           let failClear = false;
           let failLogout = false;
           let abortDownload: AbortController | undefined;
@@ -621,6 +623,10 @@ test(
           const jid = `${owner}@s.whatsapp.net`;
           const store = createChannelSessionStore({ pool, ownerId: `fixture-${mode}`, keyStore });
           const createSocket: Factory = (config) => {
+            if (failConnect)
+              throw Object.assign(new Error('synthetic-private-connect-error'), {
+                code: 'ECONNRESET',
+              });
             const events = new EventEmitter();
             sockets.push({ events, config });
             return {
@@ -674,6 +680,10 @@ test(
                   const session = await store.open();
                   return {
                     ...session,
+                    async set(values: Parameters<typeof session.set>[0]) {
+                      if (blockedSave) await blockedSave;
+                      await session.set(values);
+                    },
                     async clear() {
                       if (failClear) {
                         failClear = false;
@@ -1115,6 +1125,7 @@ test(
               lastDisconnect: { error: { output: { statusCode: 428 } } },
             });
             assert.equal((await transport.pairing!()).state, 'disconnected');
+            assert.match((await transport.pairing!()).error ?? '', /428/);
             assert.equal(
               await transport.cancelPairing!((await transport.pairing!()).pairingId!),
               false,
@@ -1134,6 +1145,57 @@ test(
             assert.ok(sockets.length > beforeDisconnect);
             sockets.at(-1)!.events.emit('connection.update', { connection: 'open' });
             assert.equal(sent.length, attempts);
+            assert.equal((await transport.pairing!()).state, 'connected');
+            assert.equal((await transport.pairing!()).error, undefined);
+            failConnect = true;
+            sockets.at(-1)!.events.emit('connection.update', {
+              connection: 'close',
+              lastDisconnect: { error: { output: { statusCode: 428 } } },
+            });
+            const failedDeadline = Date.now() + 3000;
+            while ((await transport.pairing!()).state !== 'failed' && Date.now() < failedDeadline)
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            assert.equal((await transport.pairing!()).state, 'failed');
+            assert.match((await transport.pairing!()).error ?? '', /ECONNRESET/);
+            assert.equal(
+              JSON.stringify(await transport.pairing!()).includes(
+                'synthetic-private-connect-error',
+              ),
+              false,
+            );
+            failConnect = false;
+            await transport.close();
+            transport = open();
+            await transport.pairing!();
+            sockets.at(-1)!.events.emit('connection.update', { connection: 'open' });
+            let rejectSave: (error: Error) => void = () => {};
+            blockedSave = new Promise<void>((_resolve, reject) => {
+              rejectSave = reject;
+            });
+            void blockedSave.catch(() => {});
+            const lateSave = Promise.resolve(
+              sockets.at(-1)!.config.auth.keys.set({ session: { late: Uint8Array.from([4]) } }),
+            );
+            const failedSave = assert.rejects(lateSave, /synthetic late save failure/);
+            sockets.at(-1)!.events.emit('connection.update', {
+              connection: 'close',
+              lastDisconnect: {
+                error: { message: 'synthetic-private-provider-text', output: { statusCode: 440 } },
+              },
+            });
+            const failed = await transport.pairing!();
+            assert.equal(failed.state, 'failed');
+            assert.match(failed.error ?? '', /another session.*440/);
+            assert.equal(JSON.stringify(failed).includes('synthetic-private-provider-text'), false);
+            assert.equal(transport.channels[0].error, failed.error);
+            rejectSave(new Error('synthetic late save failure'));
+            await failedSave;
+            blockedSave = undefined;
+            assert.equal((await transport.pairing!()).error, failed.error);
+            await transport.close();
+            transport = open();
+            await transport.pairing!();
+            sockets.at(-1)!.events.emit('connection.update', { connection: 'open' });
             assert.equal((await transport.pairing!()).state, 'connected');
             failClear = true;
             failLogout = true;
@@ -1345,12 +1407,17 @@ test('speech uses a bounded transcription request and generates Ogg voice output
   const bytes = Buffer.from('synthetic voice bytes');
   const usage: import('../src/ports/provider-usage.ts').ProviderUsageEvent[] = [];
   let key: string | undefined;
+  let region: 'global' | 'eu' | 'us' = 'global';
   const provider = createOpenAISpeechProvider({
-    apiKey: async () => key,
+    connection: async () => (key ? { key, region } : undefined),
     configured: () => Boolean(key),
     fetch: async (input, init) => {
       assert.equal(init?.redirect, 'error');
       assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${key}`);
+      assert.equal(
+        new URL(String(input)).origin,
+        region === 'global' ? 'https://api.openai.com' : `https://${region}.api.openai.com`,
+      );
       if (String(input).endsWith('/transcriptions')) {
         assert.ok(init?.body instanceof FormData);
         assert.equal(init.body.get('model'), 'gpt-transcribe');
@@ -1399,12 +1466,15 @@ test('speech uses a bounded transcription request and generates Ogg voice output
     /fixture-never-live|Read the attached image|synthetic voice bytes/,
   );
   key = 'fixture-rotated';
+  region = 'eu';
   await speech.synthesize('Synthetic changed key');
+  region = 'us';
+  await speech.transcribe({ bytes, mimeType: 'audio/ogg', name: 'voice.ogg' });
   key = undefined;
   await assert.rejects(speech.synthesize('Synthetic removed key'));
   let cancelled = 0;
   const failed = createOpenAISpeechProvider({
-    apiKey: 'fixture-never-live',
+    connection: { key: 'fixture-never-live' },
     fetch: async () =>
       new Response(
         new ReadableStream({
@@ -1418,6 +1488,29 @@ test('speech uses a bounded transcription request and generates Ogg voice output
   await assert.rejects(failed.transcribe!({ bytes, mimeType: 'audio/ogg', name: 'voice.ogg' }));
   await assert.rejects(failed.synthesize('Synthetic provider error'));
   assert.equal(cancelled, 2);
+  const regionalKey = 'fixture-"regional-key';
+  const denied = createOpenAISpeechProvider({
+    connection: { key: regionalKey, region: 'eu' },
+    fetch: async (input, init) => {
+      assert.equal(new URL(String(input)).hostname, 'eu.api.openai.com');
+      assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${regionalKey}`);
+      return Response.json(
+        { error: { message: `Synthetic project geography EU error ${regionalKey}` } },
+        { status: 401 },
+      );
+    },
+  });
+  for (const run of [
+    () => denied.transcribe!({ bytes, mimeType: 'audio/ogg', name: 'voice.ogg' }),
+    () => denied.synthesize('Synthetic text.'),
+  ])
+    await assert.rejects(run, (error: Error) => {
+      assert.match(error.message, /401/);
+      assert.match(error.message, /project geography EU/);
+      assert.ok(!error.message.includes(regionalKey));
+      assert.ok(!error.message.includes(JSON.stringify(regionalKey).slice(1, -1)));
+      return true;
+    });
   for (const status of [400, 401, 402, 403, 429, 503]) {
     for (const engine of ['openai', 'openrouter']) {
       let discarded = false;
@@ -1439,7 +1532,10 @@ test('speech uses a bounded transcription request and generates Ogg voice output
       };
       const provider =
         engine === 'openai'
-          ? createOpenAISpeechProvider(options)
+          ? createOpenAISpeechProvider({
+              ...options,
+              connection: async () => ({ key: await options.apiKey() }),
+            })
           : {
               ...createOpenRouterSpeechProvider(options),
               transcribe: createOpenRouterTranscriptionProvider(options).transcribe,
@@ -1461,7 +1557,7 @@ test('speech uses a bounded transcription request and generates Ogg voice output
   }
   const silent = createSpeech(
     createOpenAISpeechProvider({
-      apiKey: 'fixture-never-live',
+      connection: { key: 'fixture-never-live' },
       fetch: async () => Response.json({ text: '  ' }),
     }),
   );
@@ -1474,7 +1570,7 @@ test('speech honors the selected OpenAI voice and refuses voices from another en
   const requests: Record<string, unknown>[] = [];
   const service = createSpeech(
     createOpenAISpeechProvider({
-      apiKey: 'fixture-never-live',
+      connection: { key: 'fixture-never-live' },
       fetch: async (_url, init) => {
         requests.push(JSON.parse(String(init?.body)));
         return new Response(Buffer.from('synthetic speech'));
@@ -3184,7 +3280,7 @@ async function createFixtureTables(pool: pg.Pool, owner: string) {
   await pool.query(`${locksTable};
     CREATE TABLE threads(id uuid PRIMARY KEY,owner_id text NOT NULL,status text NOT NULL DEFAULT 'idle',created_at timestamptz NOT NULL DEFAULT now(),archived_at timestamptz);
     CREATE TABLE turns(id uuid PRIMARY KEY,parent_turn_id uuid,owner_id text NOT NULL,thread_id uuid NOT NULL REFERENCES threads(id),message_id uuid,source text NOT NULL DEFAULT 'user',source_id text UNIQUE,channel text NOT NULL DEFAULT 'web',channel_source_id text,status text NOT NULL DEFAULT 'queued',waiting_reason text,handoff_browser_id text,background boolean NOT NULL DEFAULT false,withdrawn boolean NOT NULL DEFAULT false,created_at timestamptz NOT NULL DEFAULT now(),started_at timestamptz,finished_at timestamptz,session_id uuid GENERATED ALWAYS AS (CASE WHEN background THEN id ELSE thread_id END) STORED);
-    CREATE TABLE messages(id uuid PRIMARY KEY,owner_id text NOT NULL,role text NOT NULL,text text NOT NULL,thread_id uuid REFERENCES threads(id),turn_id uuid REFERENCES turns(id),attachments jsonb NOT NULL DEFAULT '[]',presentation jsonb,answer_choices jsonb,reply_to_message_id uuid,delivered_channel text,assistant_reaction text,assistant_reacted_at timestamptz,hidden_at timestamptz,created_at timestamptz NOT NULL DEFAULT now())`);
+    CREATE TABLE messages(id uuid PRIMARY KEY,owner_id text NOT NULL,role text NOT NULL,text text NOT NULL,thread_id uuid REFERENCES threads(id),turn_id uuid REFERENCES turns(id),attachments jsonb NOT NULL DEFAULT '[]',presentation jsonb,answer_choices jsonb,reply_to_message_id uuid,delivered_channel text,approval_answer boolean,assistant_reaction text,assistant_reacted_at timestamptz,hidden_at timestamptz,created_at timestamptz NOT NULL DEFAULT now())`);
   const threadId = randomUUID();
   await pool.query('INSERT INTO threads(id,owner_id) VALUES($1,$2)', [threadId, owner]);
   return threadId;

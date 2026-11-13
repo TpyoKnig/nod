@@ -375,9 +375,9 @@ test('OpenAI previews preserve configured voices and enforce the selected speech
   ] as const) {
     await t.test(`${model} (${configuredVoice || 'empty default'})`, async () => {
       const provider = createOpenAISpeechProvider({
-        apiKey: async () => {
+        connection: async () => {
           keyRequests++;
-          return 'synthetic-speech-key';
+          return { key: 'synthetic-speech-key' };
         },
         speechModel: model,
         voice: configuredVoice,
@@ -824,6 +824,7 @@ test(
         NOD_VAULT_KEY: key.toString('base64'),
       });
       await localChoice.models!.initialize();
+      localChoice.models!.setRequestBudget(async () => async () => {});
       const { createPreferencesStore } = await import('../src/server/preferences.ts');
       const preferences = createPreferencesStore(pool, ownerId);
       const localProvider = localChoice.localSpeech as typeof localChoice.localSpeech &
@@ -885,11 +886,11 @@ test(
           }),
           /action review model is unavailable/i,
         );
-        assert.equal(checks.length, 3);
+        assert.equal(checks.length, 1);
         assert.ok(checks.every((request) => request.model === 'gpt-6.1-sol'));
         assert.deepEqual(
           checks.map((request) => request.reasoning?.effort),
-          ['low', 'low', 'low'],
+          ['low'],
         );
         assert.equal(localChoice.models!.view().selection?.modelId, audioModel.id);
         await localChoice.models!.select(models.selection!);
@@ -1253,15 +1254,15 @@ test(
       let failureText = 'Synthetic burst failed';
       application.app.get('/api/diagnostics-burst', async () => {
         for (let index = 0; index < 20; index++)
-          logFailure('fixture_burst', new Error(failureText));
+          logFailure('synthetic_burst', new Error(failureText));
         return { ok: true };
       });
-      application.app.get('/api/diagnostics-fixture/:id', async () => {
+      application.app.get('/api/diagnostics-check/:id', async () => {
         throw new Error(`Synthetic app render failed ${authToken} for example.person@example.com`);
       });
       await application.app.ready();
       const failedRequest = await application.app.inject({
-        url: '/api/diagnostics-fixture/synthetic-private-record?email=other.person@example.com',
+        url: '/api/diagnostics-check/synthetic-private-record?email=other.person@example.com',
         headers,
       });
       assert.equal(failedRequest.statusCode, 500);
@@ -1290,7 +1291,7 @@ test(
       assert.ok(failure);
       assert.match(failure.data.error.message, /Synthetic app render failed/);
       assert.equal(failure.data.context.status, 500);
-      assert.equal(failure.data.context.operation, 'api diagnostics-fixture :id');
+      assert.equal(failure.data.context.operation, 'api diagnostics-check :id');
       assert.match(diagnosticReport.clientErrors[0].data.message, /View failed/);
       assert.doesNotMatch(
         diagnostics.json().content,
@@ -1358,7 +1359,7 @@ test(
       }
       await flushJournal();
       assert.equal(
-        (await journal()).filter((entry) => entry.data?.event === 'fixture_burst').length,
+        (await journal()).filter((entry) => entry.data?.event === 'synthetic_burst').length,
         20,
       );
       adapters.integrations.configured = true;

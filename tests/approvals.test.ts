@@ -17,7 +17,11 @@ import { join } from 'node:path';
 import test from 'node:test';
 import Fastify from 'fastify';
 import pg from 'pg';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
 import type { ProductAnalytics } from '../src/ports/analytics.ts';
+import type { MemoryCurator } from '../src/ports/memory-curator.ts';
 import { createAnalytics, snapshotAnalytics } from '../src/server/analytics.ts';
 import {
   accessCookie,
@@ -28,6 +32,351 @@ import {
 import { appConfirmation } from '../src/ports/agent.ts';
 import type { ApprovalDescription, ApprovalExecutionContext } from '../src/server/approvals.ts';
 import { serverNetwork } from '../src/server/network.ts';
+import {
+  approvalContent,
+  approvalTitle,
+  gmailDraftTarget,
+  gmailMessageTarget,
+} from '../src/server/action-presentation.ts';
+import { createCommunication } from '../src/server/communication.ts';
+import { createE2eCurators } from '../scripts/e2e-curators.ts';
+import { createPiMemoryCurator } from '../src/providers/pi/memory-curator.ts';
+
+test('server confirmation uses the saved action without model calls', async () => {
+  const misleading =
+    'I have not sent anything. Do you want me to send the thank-you email to alex@example.test?';
+  let modelCalls = 0;
+  const communication = createCommunication({
+    pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async (_instructions, input) => {
+      modelCalls++;
+      return 'purpose' in input && input.purpose === 'confirmation_review'
+        ? { valid: true }
+        : { text: misleading };
+    },
+  });
+  const result = await communication.describe({
+    turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    action: 'GMAIL_FETCH_EMAILS',
+    args: { query: 'Northstar' },
+  });
+  assert.notEqual(result, misleading);
+  assert.match(result, /GMAIL_FETCH_EMAILS/);
+  assert.match(result, /Northstar/);
+  assert.doesNotMatch(result, /send.*email/i);
+  assert.equal(modelCalls, 0);
+});
+
+test('payment presentation repairs a missing action and keeps it separate from the message', async () => {
+  let drafts = 0;
+  const communication = createCommunication({
+    pool: {} as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async (_instructions, input) => {
+      assert.equal((input as { purpose: string }).purpose, 'payment');
+      drafts++;
+      return drafts === 1
+        ? { text: 'Synthetic payment details.' }
+        : { text: 'Synthetic payment details.', action: 'Approve payment' };
+    },
+  });
+  assert.deepEqual(await communication.presentPayment(null, { kind: 'payment' }), {
+    question: 'Synthetic payment details.',
+    action: 'Approve payment',
+  });
+  assert.equal(drafts, 2);
+  const confirmation = await communication.describe({
+    turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    action: 'GMAIL_FETCH_EMAILS',
+    args: { query: 'Northstar' },
+  });
+  assert.match(confirmation, /GMAIL_FETCH_EMAILS/);
+  assert.equal(drafts, 2);
+  assert.throws(
+    () => communication.present(null, { kind: 'confirmation' }),
+    /Confirmations require a saved action description/,
+  );
+});
+
+test('confirmation displays the saved action and redacts hidden values', async () => {
+  const communication = createCommunication({
+    pool: {} as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async () => {
+      throw new Error('A model must not write the action confirmation.');
+    },
+  });
+  const text = await communication.describe({
+    turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    action: 'GMAIL_CREATE_EMAIL_DRAFT',
+    args: {
+      recipient_email: 'alex@example.test',
+      subject: 'Northstar review',
+      api_key: 'synthetic-secret-value',
+      connectionId: 'synthetic-internal-connection',
+      pathId: 'synthetic-internal-path',
+    },
+    details: { account: 'tester@example.test', reason: 'unrequested' },
+  });
+  assert.match(text, /GMAIL_CREATE_EMAIL_DRAFT/);
+  assert.match(text, /alex@example.test/);
+  assert.match(text, /Northstar review/);
+  assert.match(text, /tester@example.test/);
+  assert.doesNotMatch(text, /synthetic-secret-value/);
+  assert.doesNotMatch(text, /synthetic-internal-connection|synthetic-internal-path/);
+  assert.doesNotMatch(text, /unrequested/);
+  assert.match(text, /redacted/);
+  assert.doesNotMatch(text, /send.*email/i);
+});
+
+test('confirmation escapes visual format controls and hides the internal account binding', async () => {
+  const communication = createCommunication({
+    pool: {} as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async () => {
+      throw new Error('A model must not write the action confirmation.');
+    },
+  });
+  const bidiOverride = String.fromCharCode(0x202e);
+  const joiner = String.fromCharCode(0x200d);
+  const nonJoiner = String.fromCharCode(0x200c);
+  const question = await communication.describe({
+    turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    action: 'GMAIL_DELETE_MESSAGE',
+    args: { message_id: 'synthetic-message' },
+    details: {
+      target: {
+        subject: `Northstar ${bidiOverride}review ${joiner}joined ${nonJoiner}Persian`,
+        from: 'alex@example.test',
+      },
+      verifiedBinding: 'synthetic-internal-binding',
+    },
+  });
+  assert.match(question, /GMAIL_DELETE_MESSAGE/);
+  assert.match(question, /\\u202e/);
+  assert.ok(question.includes(joiner));
+  assert.ok(question.includes(nonJoiner));
+  assert.doesNotMatch(question, /(?![\u200c\u200d])\p{Cf}/u);
+  assert.doesNotMatch(question, /synthetic-internal-binding/);
+  const draft = await communication.describe({
+    turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    action: 'GMAIL_DELETE_DRAFT',
+    args: { draft_id: 'synthetic-draft' },
+    details: {
+      target: {
+        draftId: 'synthetic-draft',
+        subject: 'Synthetic team summary',
+        to: 'cleanup@example.test',
+      },
+      verifiedDraftMessageId: 'synthetic-internal-draft-message',
+    },
+    work: { kind: 'task', title: 'Email summaries for the team' },
+  });
+  assert.match(draft, /Email summaries for the team/);
+  assert.match(draft, /Synthetic team summary/);
+  assert.match(draft, /cleanup@example.test/);
+  assert.doesNotMatch(draft, /synthetic-internal-draft-message/);
+  const ccOnly = await communication.describe({
+    turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    action: 'GMAIL_DELETE_DRAFT',
+    args: { draft_id: 'synthetic-cc-draft' },
+    details: {
+      target: {
+        draftId: 'synthetic-cc-draft',
+        cc: 'cc@example.test',
+        bcc: 'bcc@example.test',
+      },
+    },
+  });
+  const ccTree = unified().use(remarkParse).use(remarkGfm).parse(ccOnly);
+  const ccContext = ccTree.children.find(
+    (node) =>
+      node.type === 'paragraph' && node.children.some((child) => child.type === 'inlineCode'),
+  );
+  assert.ok(ccContext?.type === 'paragraph');
+  assert.deepEqual(
+    ccContext.children.flatMap((child) => (child.type === 'inlineCode' ? [child.value] : [])),
+    ['cc@example.test', 'bcc@example.test'],
+  );
+});
+
+test('draft cleanup context renders untrusted names as text without links or HTML', async () => {
+  const communication = createCommunication({
+    pool: {} as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async () => {
+      throw new Error('A model must not write the action confirmation.');
+    },
+  });
+  const title = 'Review [board](https://task.example.test) <b>today</b> `status`';
+  const subject = 'Summary <img src=x> https://subject.example.test ``draft``';
+  const to = 'alex@example.test';
+  const cc = 'www.example.test';
+  const bcc = '[audit](https://bcc.example.test)';
+  const question = await communication.describe({
+    turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    action: 'GMAIL_DELETE_DRAFT',
+    args: { draft_id: 'synthetic-draft' },
+    details: { target: { draftId: 'synthetic-draft', subject, to, cc, bcc } },
+    work: { kind: 'task', title },
+  });
+  const tree = unified().use(remarkParse).use(remarkGfm).parse(question);
+  const context = tree.children.find(
+    (node) =>
+      node.type === 'paragraph' &&
+      node.children.some((child) => child.type === 'text' && child.value.includes('Nod proposes')),
+  );
+  assert.ok(context?.type === 'paragraph');
+  for (const child of context.children) {
+    assert.ok(child.type === 'text' || child.type === 'inlineCode');
+  }
+  assert.deepEqual(
+    context.children.flatMap((child) => (child.type === 'inlineCode' ? [child.value] : [])),
+    [title, subject, to, cc, bcc],
+  );
+});
+
+test('confirmation stops on cancellation and rejects an unbound presentation', async () => {
+  const communication = createCommunication({
+    pool: {} as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async () => {
+      throw new Error('A model must not write the action confirmation.');
+    },
+  });
+  const controller = new AbortController();
+  controller.abort(new Error('Synthetic stop'));
+  await assert.rejects(
+    communication.describe(
+      {
+        turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+        action: 'GMAIL_FETCH_EMAILS',
+        args: { query: 'Northstar' },
+      },
+      controller.signal,
+    ),
+    /Synthetic stop/,
+  );
+  assert.throws(
+    () => communication.present(null, { kind: 'confirmation', action: 'GMAIL_FETCH_EMAILS' }),
+    /saved action description/,
+  );
+});
+
+test('Gmail delete target metadata must match the bound message ID', () => {
+  const target = gmailMessageTarget(
+    {
+      successful: true,
+      data: {
+        id: 'synthetic-message',
+        payload: {
+          headers: [
+            { name: 'Subject', value: 'Northstar review' },
+            { name: 'From', value: 'alex@example.test' },
+          ],
+        },
+      },
+    },
+    'synthetic-message',
+  );
+  assert.deepEqual(target, {
+    messageId: 'synthetic-message',
+    subject: 'Northstar review',
+    from: 'alex@example.test',
+  });
+  assert.equal(
+    gmailMessageTarget(
+      { message: { id: 'another-message', subject: 'Northstar review' } },
+      'synthetic-message',
+    ),
+    undefined,
+  );
+  assert.equal(
+    gmailMessageTarget({ message: { id: 'synthetic-message' } }, 'synthetic-message'),
+    undefined,
+  );
+  const long = gmailMessageTarget(
+    {
+      message: {
+        id: 'synthetic-message',
+        subject: 'S'.repeat(350),
+        from: 'F'.repeat(360),
+        to: 'T'.repeat(360),
+      },
+    },
+    'synthetic-message',
+  );
+  assert.match(long?.subject ?? '', / \[truncated\]$/);
+  assert.match(long?.from ?? '', / \[truncated\]$/);
+  assert.match(long?.to ?? '', / \[truncated\]$/);
+  assert.ok((long?.subject?.length ?? 0) <= 300);
+});
+
+test('Gmail draft target requires the bound draft and its current message', () => {
+  const observed = {
+    successful: true,
+    data: {
+      id: 'synthetic-draft',
+      message: {
+        id: 'synthetic-draft-message',
+        payload: {
+          headers: [
+            { name: 'Subject', value: 'Synthetic team summary' },
+            { name: 'To', value: 'cleanup@example.test' },
+          ],
+        },
+      },
+    },
+  };
+  assert.deepEqual(gmailDraftTarget(observed, 'synthetic-draft'), {
+    draftId: 'synthetic-draft',
+    messageId: 'synthetic-draft-message',
+    subject: 'Synthetic team summary',
+    to: 'cleanup@example.test',
+  });
+  assert.deepEqual(
+    gmailDraftTarget(
+      {
+        id: 'synthetic-draft',
+        message: {
+          id: 'synthetic-draft-message',
+          payload: {
+            headers: [
+              { name: 'Cc', value: 'cc@example.test' },
+              { name: 'Bcc', value: 'bcc@example.test' },
+            ],
+          },
+        },
+      },
+      'synthetic-draft',
+    ),
+    {
+      draftId: 'synthetic-draft',
+      messageId: 'synthetic-draft-message',
+      cc: 'cc@example.test',
+      bcc: 'bcc@example.test',
+    },
+  );
+  assert.equal(gmailDraftTarget(observed, 'another-draft'), undefined);
+  assert.equal(
+    gmailDraftTarget(
+      { data: { id: 'synthetic-draft', message: { subject: 'Synthetic team summary' } } },
+      'synthetic-draft',
+    ),
+    undefined,
+  );
+  assert.equal(
+    gmailDraftTarget(
+      {
+        id: 'synthetic-draft',
+        message: { id: 'synthetic-draft-message', from: 'sender@example.test' },
+      },
+      'synthetic-draft',
+    ),
+    undefined,
+  );
+});
 
 test('server configuration refuses remote exposure without a valid token and an exact secure public origin', () => {
   const key = randomBytes(32).toString('base64url');
@@ -303,6 +652,100 @@ test('localhost access requires the owner key and rejects foreign Host, Origin a
   }
 });
 
+test('approval cards shorten long recipients and bodies, skip blank bodies and title MCP tools', () => {
+  const many = Array.from({ length: 40 }, (_, index) => `person${index}@example.test`);
+  const long = approvalContent('GMAIL_SEND_EMAIL', {
+    to: many,
+    subject: 'Synthetic',
+    is_html: true,
+    body: `<style>p{color:red}</style><p>Tom &amp; Ann&#39;s <a href="https://example.test/pay">invoice</a></p>${'x'.repeat(5000)}`,
+  });
+  const shownTo = long.fields![0]!.value;
+  const kept = shownTo.split(' and ')[0]!.split(', ');
+  assert.deepEqual(kept, many.slice(0, kept.length));
+  assert.ok(shownTo.endsWith(` and ${many.length - kept.length} more`));
+  assert.ok(long.body!.startsWith("Tom & Ann's invoice (https://example.test/pay)\n"));
+  assert.equal(long.bodyCut, true);
+  assert.deepEqual(approvalContent('GMAIL_SEND_EMAIL', { to: 'a@example.test', body: 'Hi' }), {
+    fields: [{ label: 'To', value: 'a@example.test' }],
+    body: 'Hi',
+  });
+  assert.deepEqual(
+    approvalContent('GMAIL_SEND_EMAIL', { to: 'a@example.test', body: '  ', text: 'Hi' }),
+    { fields: [{ label: 'To', value: 'a@example.test' }], body: 'Hi' },
+  );
+  assert.equal(
+    approvalContent('GMAIL_SEND_EMAIL', {
+      to: 'a@example.test',
+      is_html: true,
+      body: '<scr<script>x</script>ipt>y</script>Hi there',
+    }).body,
+    'xipt>yHi there',
+  );
+  const started = performance.now();
+  const nested = approvalContent('GMAIL_SEND_EMAIL', {
+    to: 'a@example.test',
+    is_html: true,
+    body: `Hi${'<scr'.repeat(100_000)}<script></script>${'ipt></script>'.repeat(100_000)}`,
+  });
+  assert.ok(performance.now() - started < 2000);
+  assert.ok(nested.body!.startsWith('Hi'));
+  assert.equal(nested.bodyCut, true);
+  const filler = '<i></i>'.repeat(2850);
+  for (const tail of [
+    '<a href="https://example.test/hidden">Pay here now and more words to cross</a>',
+    '<style>p{color:red;background:blue;margin:0;padding:0;border:0}</style>',
+    '<img alt="synthetic" src="https://example.test/a-long-image-address.png">',
+  ]) {
+    const crossing = approvalContent('GMAIL_SEND_EMAIL', {
+      to: 'a@example.test',
+      is_html: true,
+      body: `<p>Hi</p>${filler}${tail}`,
+    });
+    assert.equal(crossing.body, 'Hi');
+    assert.equal(crossing.bodyCut, true);
+  }
+  assert.equal(approvalTitle('mcp__synthetic_server__create_page').title, 'Create page');
+  assert.equal(approvalTitle('mcp__synthetic__').title, 'Run an action');
+});
+
+test('HTML approval previews show the actual link destination', () => {
+  assert.equal(
+    approvalContent('GMAIL_SEND_EMAIL', {
+      to: 'recipient@example.test',
+      is_html: true,
+      body: '<noscript><p>Hi</p><a href="https://actual.example.test">Pay here</a></noscript>',
+    }).body,
+    'Hi\nPay here (https://actual.example.test)',
+  );
+  for (const [attributes, address] of [
+    [
+      'data-href="https://safe.example.test" href="https://actual.example.test"',
+      'https://actual.example.test',
+    ],
+    [
+      'title=" href=\'https://safe.example.test\' " href="https://actual.example.test"',
+      'https://actual.example.test',
+    ],
+    ['href="https://actual.example.test?a=1&copy=2"', 'https://actual.example.test?a=1&copy=2'],
+    ['href="https://actual.example.test?a=1&amp;b=2"', 'https://actual.example.test?a=1&b=2'],
+  ]) {
+    const preview = approvalContent('GMAIL_SEND_EMAIL', {
+      to: 'recipient@example.test',
+      is_html: true,
+      body: `<p>Hi</p><a ${attributes}>Pay here</a>`,
+    });
+    assert.equal(preview.body, `Hi\nPay here (${address})`);
+  }
+  const preview = approvalContent('GMAIL_SEND_EMAIL', {
+    to: 'recipient@example.test',
+    is_html: true,
+    body: `<p>${'x'.repeat(3985)}</p><a href="https://actual.example.test">Pay here</a>`,
+  });
+  assert.equal(preview.body, 'x'.repeat(3985));
+  assert.equal(preview.bodyCut, true);
+});
+
 test(
   'approvals preserve explicit-request authority, execute confirmed snapshots once and fence owners',
   { skip: !process.env.TEST_DATABASE_URL, timeout: 60_000 },
@@ -469,6 +912,7 @@ test(
       await db.initializeDatabase();
       await thread.initializeThreads();
       await personal.initialize({ workers: false });
+      let answerReply = (reply: string) => trust.answer(reply);
       const approved = await createApprovals(
         async (action, args, context) => {
           calls.push({ action, args, context });
@@ -481,7 +925,7 @@ test(
           if (rejectPreflight)
             throw Object.assign(new Error('Fixture account disconnected.'), { statusCode: 409 });
         },
-        (reply) => trust.answer(reply),
+        (reply) => answerReply(reply),
         async (proposal, signal) => {
           if (descriptionFailure) throw new Error('Synthetic confirmation model failure.');
           return describe(proposal, signal);
@@ -514,8 +958,10 @@ test(
       let duringReview: () => Promise<void> = async () => {};
       let duringReply: () => Promise<void> = async () => {};
       let aligned:
-        boolean | string | ((input: Record<string, any>) => boolean | Record<string, unknown>) =
-        false;
+        | boolean
+        | string
+        | null
+        | ((input: Record<string, any>) => boolean | Record<string, unknown>) = false;
       let ruled = false;
       const cite = (input: Record<string, any>) =>
         input.userMessages?.at(-1)?.text ??
@@ -563,6 +1009,7 @@ test(
           await duringReview();
           const yes =
             typeof aligned === 'function' ? aligned(input as Record<string, any>) : aligned;
+          if (yes === null) return null;
           if (yes && typeof yes === 'object') return yes;
           return {
             run: yes,
@@ -571,6 +1018,79 @@ test(
           };
         },
       });
+      await t.test(
+        'e2e curators classify typed approval replies without a live model',
+        async (t) => {
+          const original = answerReply;
+          t.after(() => {
+            answerReply = original;
+          });
+          const keyless = createPiMemoryCurator({ provider: 'openai' });
+          assert.equal(keyless.configured, false);
+          const harness = createE2eCurators(
+            { provider: 'openai', model: 'gpt-6.1-sol', apiKey: 'synthetic-e2e-key' },
+            (options) => ({
+              id: options.model ?? 'synthetic-helper',
+              configured: true,
+              curate: async ({ task, input }) => {
+                assert.equal(task, 'review');
+                if (options.model !== 'gpt-6.1-sol' || options.lightest !== true) return undefined;
+                const reply = (input as { reply?: unknown }).reply;
+                return { answer: reply === 'Yes' ? 'yes' : reply === 'No' ? 'no' : 'other' };
+              },
+            }),
+          );
+          const reviewer = (curator: MemoryCurator) =>
+            createTrust({
+              pool: db.pool,
+              ownerId,
+              review: (instructions, input, signal) =>
+                curator.configured
+                  ? curator.curate({ task: 'review', instructions, input }, signal)
+                  : Promise.resolve(undefined),
+            });
+          const pending = async (label: string) => {
+            const turn = await begin(`Synthetic e2e ${label} confirmation`);
+            const id = await propose(turn, 'NOD_notification_preferences_update', {
+              notificationRule: `Synthetic e2e ${label}`,
+            });
+            await finish(turn.turnId);
+            return id;
+          };
+          const keylessTrust = reviewer(keyless);
+          const helperTrust = reviewer(harness.classificationCurator);
+          const harnessTrust = reviewer(harness.onboardingCurator);
+          const callsBefore = calls.length;
+          answerReply = (reply) => keylessTrust.answer(reply);
+          const beforeYes = await pending('keyless Yes');
+          await confirm(beforeYes, true);
+          const beforeNo = await pending('keyless No');
+          await confirm(beforeNo, false);
+          assert.equal((await stored(beforeYes)).status, 'expired');
+          assert.equal((await stored(beforeNo)).status, 'expired');
+          answerReply = (reply) => helperTrust.answer(reply);
+          const wrongModel = await pending('helper Yes');
+          await confirm(wrongModel, true);
+          assert.equal((await stored(wrongModel)).status, 'expired');
+          assert.equal(calls.length, callsBefore);
+          answerReply = (reply) => harnessTrust.answer(reply);
+          const afterYes = await pending('selected Yes');
+          await confirm(afterYes, true);
+          assert.equal((await stored(afterYes)).status, 'confirmed');
+          await execute(afterYes);
+          assert.equal((await stored(afterYes)).status, 'completed');
+          assert.equal(calls.length, callsBefore + 1);
+          await finish((await stored(afterYes)).execution_turn_id, 'succeeded');
+          const afterNo = await pending('selected No');
+          await confirm(afterNo, false);
+          assert.equal((await stored(afterNo)).status, 'declined');
+          assert.equal(calls.length, callsBefore + 1);
+          await finish((await stored(afterNo)).execution_turn_id, 'succeeded');
+          const afterOther = await pending('selected Maybe');
+          await confirm(afterOther, true, { text: 'Maybe' });
+          assert.equal((await stored(afterOther)).status, 'expired');
+        },
+      );
       const compareVerdict = (
         verdict: Awaited<ReturnType<typeof trust.check>>,
         expected: Record<string, unknown>,
@@ -760,6 +1280,56 @@ test(
           await finish(superseded.turnId, 'cancelled');
         },
       );
+
+      await t.test('an unusable trust check answer is logged with its cause', async () => {
+        const { withFailureLog } = await import('../src/server/failure-log.ts');
+        const logged: Array<{ event: string; error: unknown }> = [];
+        const sink = (event: string, error: unknown) => {
+          logged.push({ event, error });
+        };
+        const unusable = () =>
+          logged.filter(({ event }) => event === 'trust_check_unusable').map(({ error }) => error);
+        const checkWith = async (turn: Awaited<ReturnType<typeof begin>>) => {
+          logged.length = 0;
+          const verdict = await withFailureLog(sink, () =>
+            trust.check(turn, 'GMAIL_SEND_EMAIL', email('ana@example.test')),
+          );
+          assert.deepEqual(
+            { confirm: verdict.confirm, reason: (verdict as any).reason },
+            {
+              confirm: true,
+              reason: 'unrequested',
+            },
+          );
+        };
+
+        const empty = await begin('Email Ana the synthetic invoice.');
+        aligned = null;
+        await checkWith(empty);
+        assert.deepEqual(unusable(), [{ name: 'TrustCheckUnusable', code: 'no_answer' }]);
+        await finish(empty.turnId, 'cancelled');
+
+        const invented = await begin('Email Ana the synthetic invoice.');
+        aligned = () => ({ run: true, because: 'Send it to everyone.' });
+        await checkWith(invented);
+        assert.deepEqual(unusable(), [{ name: 'TrustCheckUnusable', code: 'basis_rejected' }]);
+        await finish(invented.turnId, 'cancelled');
+
+        const requestText = 'Email Ana the synthetic invoice.';
+        const stale = await begin(requestText);
+        const correction = await thread.submitUserMessage('Correction: do not send that invoice.');
+        await finish(correction.turnId, 'cancelled');
+        aligned = () => ({ run: true, because: requestText });
+        await checkWith(stale);
+        assert.deepEqual(unusable(), [{ name: 'TrustCheckUnusable', code: 'superseded' }]);
+        await finish(stale.turnId, 'cancelled');
+
+        const declined = await begin('Email Ana the synthetic invoice.');
+        aligned = false;
+        await checkWith(declined);
+        assert.deepEqual(unusable(), []);
+        await finish(declined.turnId, 'cancelled');
+      });
 
       await t.test('a newer chat correction before action handoff prevents the write', async () => {
         aligned = true;
@@ -2492,6 +3062,106 @@ test(
       );
 
       await t.test(
+        'an unquoted clarification leaves a saved task with a visible way to continue',
+        async (t) => {
+          const parent = await begin(
+            'Summarise the synthetic inbox and ask before sending anything.',
+          );
+          const task = (await tasks.execute(
+            parent,
+            {
+              action: 'start',
+              title: 'Synthetic inbox review',
+              message: 'Reviewing the synthetic inbox.',
+              doneWhen: 'The summary is ready',
+              now: 'Reading the synthetic inbox',
+            },
+            (await row(parent.turnId)).message_id,
+          )) as { id: string };
+          t.after(async () => {
+            await db.pool.query(
+              "UPDATE turns SET task_id=NULL,status='cancelled',finished_at=now() WHERE task_id=$1",
+              [task.id],
+            );
+            await db.pool.query('DELETE FROM tasks WHERE id=$1', [task.id]);
+          });
+          await finish(parent.turnId, 'succeeded');
+          const workerId = (
+            await db.pool.query("SELECT id FROM turns WHERE task_id=$1 AND source='task'", [
+              task.id,
+            ])
+          ).rows[0].id as string;
+          const worker = await running(workerId);
+          const before = calls.length;
+          const approvalId = await propose(
+            worker,
+            'GMAIL_SEND_EMAIL',
+            email('synthetic-recipient@example.test'),
+          );
+          const confirmationId = (await stored(approvalId)).confirmation_message_id;
+          await finish(workerId);
+
+          const clarification = await messages.submit('wait what does that mean');
+          assert.equal((await row(clarification.turnId)).source, 'user');
+          assert.equal((await stored(approvalId)).status, 'expired');
+          assert.equal(await turnStatus(workerId), 'cancelled');
+          assert.equal(calls.length, before);
+
+          const response = await request('GET', '/api/tasks');
+          assert.equal(response.statusCode, 200, response.body);
+          const detail = response
+            .json<
+              Array<{
+                id: string;
+                status: string;
+                now: string;
+                question: string | null;
+                questionMessageId: string | null;
+              }>
+            >()
+            .find((item) => item.id === task.id);
+          assert.ok(detail);
+          assert.equal(detail.status, 'needs_you');
+          assert.equal(detail.now, 'Reading the synthetic inbox');
+          assert.match(detail.question ?? '', /did not run.*Reply here to continue/i);
+          assert.ok(detail.questionMessageId);
+          assert.notEqual(detail.questionMessageId, confirmationId);
+          const continuation = (
+            await db.pool.query('SELECT turn_id,text FROM messages WHERE id=$1 AND owner_id=$2', [
+              detail.questionMessageId,
+              ownerId,
+            ])
+          ).rows[0];
+          assert.equal(continuation.turn_id, workerId);
+          assert.equal(continuation.text, detail.question);
+          assert.equal(
+            (
+              await db.pool.query('SELECT created_at FROM messages WHERE id=$1 AND owner_id=$2', [
+                detail.questionMessageId,
+                ownerId,
+              ])
+            ).rows[0].created_at >
+              (
+                await db.pool.query('SELECT created_at FROM messages WHERE id=$1 AND owner_id=$2', [
+                  clarification.messageId,
+                  ownerId,
+                ])
+              ).rows[0].created_at,
+            true,
+          );
+
+          const resumed = await messages.submit('Continue the remaining synthetic summary.', [], {
+            replyToMessageId: detail.questionMessageId,
+          });
+          const resumedTurn = await row(resumed.turnId);
+          assert.equal(resumedTurn.session_id, task.id);
+          assert.equal(resumedTurn.parent_turn_id, workerId);
+          assert.equal((await stored(approvalId)).status, 'expired');
+          assert.equal(calls.length, before);
+        },
+      );
+
+      await t.test(
         'background turns share one pending confirmation for the same action',
         async () => {
           const args = { id: randomUUID() };
@@ -2548,6 +3218,70 @@ test(
           await db.pool.query(
             "UPDATE turns SET status='succeeded',finished_at=now() WHERE status IN ('queued','running')",
           );
+        },
+      );
+
+      await t.test(
+        'approval clicks bind the card, action, and client retry to the same approval',
+        async () => {
+          const first = await begin('Synthetic first approval');
+          const firstId = await propose(first, 'GMAIL_SEND_EMAIL', {
+            recipient_email: 'first@example.test',
+            subject: 'First',
+            body: 'First synthetic message.',
+          });
+          await finish(first.turnId);
+          const second = await begin('Synthetic second approval');
+          const secondId = await propose(second, 'GMAIL_SEND_EMAIL', {
+            recipient_email: 'second@example.test',
+            subject: 'Second',
+            body: 'Second synthetic message.',
+          });
+          await finish(second.turnId);
+          const firstCard = await stored(firstId);
+          const input = {
+            text: 'Send',
+            threadId: first.threadId,
+            replyToMessageId: firstCard.confirmation_message_id,
+            clientMessageId: randomUUID(),
+            approvalAnswer: { approvalId: secondId, approved: true },
+          };
+          const refused = await request('POST', '/api/messages', input);
+          assert.equal(refused.statusCode, 409, refused.body);
+          assert.equal((await stored(firstId)).status, 'pending');
+          assert.equal((await stored(secondId)).status, 'pending');
+          assert.equal(
+            (await db.pool.query('SELECT 1 FROM messages WHERE id=$1', [input.clientMessageId]))
+              .rowCount,
+            0,
+          );
+          const valid = { ...input, approvalAnswer: { approvalId: firstId, approved: true } };
+          const accepted = await request('POST', '/api/messages', valid);
+          assert.equal(accepted.statusCode, 200, accepted.body);
+          assert.deepEqual((await request('POST', '/api/messages', valid)).json(), accepted.json());
+          const changed = await request('POST', '/api/messages', input);
+          assert.equal(changed.statusCode, 409, changed.body);
+          assert.equal((await stored(secondId)).status, 'pending');
+          const shownState = async () =>
+            (await request('GET', `/api/messages/around/${firstCard.confirmation_message_id}`))
+              .json()
+              .find((message: { id: string }) => message.id === firstCard.confirmation_message_id)
+              .approval.state;
+          assert.equal(await shownState(), 'working');
+          await finish(first.turnId, 'cancelled');
+          await finish(second.turnId, 'cancelled');
+          await finish(accepted.json().turnId, 'cancelled');
+          const before = calls.length;
+          await assert.rejects(
+            approvals.executeConfirmed(accepted.json().turnId, new AbortController().signal),
+          );
+          assert.equal(calls.length, before);
+          assert.equal(await shownState(), 'expired');
+          await db.pool.query("UPDATE approvals SET status='executing' WHERE id=$1", [firstId]);
+          assert.equal(await shownState(), 'uncertain');
+          await db.pool.query("UPDATE approvals SET status='completed' WHERE id=$1", [firstId]);
+          assert.equal(await shownState(), 'done');
+          await db.pool.query("UPDATE approvals SET status='confirmed' WHERE id=$1", [firstId]);
         },
       );
 
