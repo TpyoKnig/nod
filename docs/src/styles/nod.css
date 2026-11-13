@@ -566,6 +566,13 @@ body.lp {
   white-space: nowrap;
   text-align: center;
 }
+.lp-hard-ones-frame h2.lp-heading-pair {
+  line-height: 1.15;
+  white-space: normal;
+}
+.lp-heading-pair span {
+  white-space: nowrap;
+}
 .lp-hard-ones-sub {
   font-size: 18px;
   width: 624px;
