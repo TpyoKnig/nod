@@ -10,7 +10,6 @@ import eyesIcon from '../assets/landing/eyes.svg?url';
 import pencilComposeIcon from '../assets/landing/pencil-compose.svg?url';
 import graduationCapIcon from '../assets/landing/graduation-cap.svg?url';
 import downloadIcon from '../assets/landing/download.svg?url';
-import nodMark from '../assets/landing/nod-mark.svg?url';
 import heroCollage from '../assets/landing/hero-collage.png';
 import heroVideoPoster from '../assets/landing/hero-video-poster.png';
 import demoAv1 from '../assets/video/nod-demo-1080.av1.mp4?url';
@@ -27,7 +26,6 @@ import { gtmSnippet } from '../gtm.mjs';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 const github = 'https://github.com/n8n-io/nod';
-const productHunt = 'https://www.producthunt.com/products/n8n-io';
 const n8n = 'https://n8n.io';
 const installGuide = `${base}get-started/install-desktop/`;
 const benchmarkGuide = `${base}how-it-works/benchmarks/`;
@@ -93,9 +91,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
       <main class="lp-main">
       <section class="lp-hero">
         <div class="lp-hero-top">
-          <a class="lp-ph-tag" href={productHunt} target="_blank" rel="noopener"
-            ><span class="lp-ph-dot"></span><span>Live on Product Hunt</span><span class="lp-ph-cta">Support the launch →</span></a
-          >
+          <span class="lp-hero-tag mono">Research preview</span>
           <div class="lp-hero-headline-frame lp-dot-grid-bg">
             <h1 class="lp-hero-headline">
               <span class="lp-hero-name"
@@ -654,17 +650,28 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
       </main>
 
       <footer class="lp-footer">
-        <p class="lp-logo-tag"><img class="glyph" src={nodMark} alt="" /><span
-            >Nod by <a href={n8n} target="_blank" rel="noopener">n8n</a> labs</span
-          >
-        </p>
-        <nav class="lp-footer-nav">
-          <a href="https://n8n.io/legal/nod-terms-of-use/">Terms</a>
-          <a href="https://n8n.io/legal/privacy/">Privacy</a>
-          <a href="https://n8n.io/imprint/">Imprint</a>
-          <a href={base}>Docs</a>
-          <a href={github}>GitHub</a>
-        </nav>
+        <div class="lp-footer-row">
+          <div class="lp-brand">
+            <a class="lp-brand-logo" href={n8n} target="_blank" rel="noopener"
+              ><img src={n8nLogo} alt="n8n" width="100" height="20" loading="lazy" /></a
+            >
+            <span class="lp-brand-badge mono">Labs</span>
+          </div>
+          <nav class="lp-footer-nav mono" aria-label="Product">
+            <a href={base}>Docs</a>
+            <a href={github} target="_blank" rel="noopener">GitHub</a>
+            <a href="https://community.n8n.io/c/n8n-labs/48" target="_blank" rel="noopener">Community</a>
+            <a href={installGuide} data-download>Download</a>
+          </nav>
+        </div>
+        <div class="lp-footer-row lp-footer-bottom">
+          <p class="lp-footer-fine">© {new Date().getFullYear()} n8n</p>
+          <nav class="lp-footer-nav lp-footer-legal" aria-label="Legal">
+            <a href="https://n8n.io/legal/nod-terms-of-use/">Terms</a>
+            <a href="https://n8n.io/legal/privacy/">Privacy</a>
+            <a href="https://n8n.io/imprint/">Imprint</a>
+          </nav>
+        </div>
       </footer>
     </div>
 
