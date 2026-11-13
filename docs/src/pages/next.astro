@@ -151,7 +151,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
               />
               <span class="lp-video-play-icon"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 2.5v11l9-5.5z"></path></svg></span>
             </button>
-            <video id="heroVideo" controls playsinline preload="none" width="1920" height="1080" aria-label="Nod demo video" hidden>
+            <video id="heroVideo" controls playsinline preload="none" poster={heroVideoPoster.src} width="1920" height="1080" aria-label="Nod demo video" hidden>
               <source src={demoAv1Small} media="(max-width: 719px)" type='video/mp4; codecs="av01.0.05M.10, mp4a.40.2"' />
               <source src={demoAv1} type='video/mp4; codecs="av01.0.08M.10, mp4a.40.2"' />
               <source src={demoHevcSmall} media="(max-width: 719px)" type='video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"' />

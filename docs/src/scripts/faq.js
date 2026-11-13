@@ -21,7 +21,6 @@ export function startFaq() {
 
       if (reduce.matches) {
         item.open = opening;
-        if (opening) answer.animate({ opacity: [0, 1] }, { duration: 200, easing });
         return;
       }
 
