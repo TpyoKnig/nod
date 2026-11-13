@@ -2550,6 +2550,7 @@ test('decision routing uses the selected connection and never sends subscription
     NOD_VAULT_KEY: Buffer.alloc(32, 7).toString('base64'),
   });
   const models = adapters.models!;
+  models.setRequestBudget(async () => async () => {});
   let selected: {
     provider: 'openai' | 'openrouter' | 'anthropic' | 'compatible';
     method: 'api_key' | 'oauth' | 'subscription';
@@ -2622,6 +2623,7 @@ test('decision routing uses the selected connection and never sends subscription
     TYPESAFE_API_KEY: 'fixture-explicit-jev-key',
     NOD_FEEDBACK_ENABLED: 'false',
   });
+  overridden.models!.setRequestBudget(async () => async () => {});
   overridden.models!.resolve = async () => {
     throw new Error('The override must not read another connection.');
   };
@@ -2677,6 +2679,7 @@ test('trust mode selects available Jev, Decider and OpenAI before the small LLM'
     NOD_TRUST_MODEL: 'decision',
     NOD_FEEDBACK_ENABLED: 'false',
   });
+  adapters.models!.setRequestBudget(async () => async () => {});
   assert.equal(adapters.trustModel, 'decision');
   const keys = new Map([
     ['openai', 'fixture-openai'],
@@ -2741,6 +2744,7 @@ test('trust mode selects available Jev, Decider and OpenAI before the small LLM'
     TYPESAFE_API_KEY: 'fixture-typesafe',
     NOD_FEEDBACK_ENABLED: 'false',
   });
+  direct.models!.setRequestBudget(async () => async () => {});
   direct.models!.hasApiKey = () => false;
   await check(direct);
   assert.equal(requests.at(-1)?.model, 'jev-1.14.0');
@@ -2749,6 +2753,7 @@ test('trust mode selects available Jev, Decider and OpenAI before the small LLM'
     NOD_TRUST_MODEL: 'decision',
     NOD_FEEDBACK_ENABLED: 'false',
   });
+  router.models!.setRequestBudget(async () => async () => {});
   router.models!.hasApiKey = (provider) => provider === 'openrouter';
   router.models!.apiKey = async () => 'fixture-router';
   await check(router);
@@ -7327,64 +7332,65 @@ test('a failed model request leaves none of its unanswered input for later turns
   assert.ok(requests[4].includes('Hi'));
 });
 
-test('task classification has a small request budget and never retries or records conversation traces', async (t) => {
+test('task and batch classification have a small request budget and never retries or records conversation traces', async (t) => {
   const deadlines: number[] = [];
   t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
     deadlines.push(milliseconds);
     return new AbortController().signal;
   });
-  for (const result of ['stop', 'error', 'aborted', 'length', 'transport'] as const)
-    await t.test(result, async () => {
-      let calls = 0;
-      let traces = 0;
-      const usage: Array<Partial<ProviderUsageEvent>> = [];
-      const runtime = {
-        setRuntimeApiKey: async () => {},
-        getModel: () => ({ provider: 'openai', id: 'gpt-6-luna' }),
-        completeSimple: async (
-          _model: unknown,
-          context: { messages: Array<{ content: unknown }> },
-          options: {
-            maxTokens: number;
-            maxRetries: number;
-            timeoutMs: number;
-            signal: AbortSignal;
+  for (const task of ['classify', 'attention'] as const)
+    for (const result of ['stop', 'error', 'aborted', 'length', 'transport'] as const)
+      await t.test(`${task}: ${result}`, async () => {
+        let calls = 0;
+        let traces = 0;
+        const usage: Array<Partial<ProviderUsageEvent>> = [];
+        const runtime = {
+          setRuntimeApiKey: async () => {},
+          getModel: () => ({ provider: 'openai', id: 'gpt-6-luna' }),
+          completeSimple: async (
+            _model: unknown,
+            context: { messages: Array<{ content: unknown }> },
+            options: {
+              maxTokens: number;
+              maxRetries: number;
+              timeoutMs: number;
+              signal: AbortSignal;
+            },
+          ) => {
+            calls++;
+            assert.equal(options.maxTokens, 512);
+            assert.equal(options.maxRetries, 0);
+            assert.equal(options.timeoutMs, 10_000);
+            assert.equal(deadlines.at(-1), 10_000);
+            assert.equal(options.signal.aborted, false);
+            assert.equal(context.messages[0].content, '{"request":"Compare synthetic products"}');
+            if (result === 'transport') throw new Error('Synthetic transport failure');
+            return { ...fauxAssistantMessage('{"task_type":"research"}'), stopReason: result };
           },
-        ) => {
-          calls++;
-          assert.equal(options.maxTokens, 512);
-          assert.equal(options.maxRetries, 0);
-          assert.equal(options.timeoutMs, 10_000);
-          assert.equal(deadlines.at(-1), 10_000);
-          assert.equal(options.signal.aborted, false);
-          assert.equal(context.messages[0].content, '{"request":"Compare synthetic products"}');
-          if (result === 'transport') throw new Error('Synthetic transport failure');
-          return { ...fauxAssistantMessage('{"task_type":"research"}'), stopReason: result };
-        },
-      };
-      const curator = createPiMemoryCurator({
-        provider: 'openai',
-        model: 'gpt-6-luna',
-        apiKey: 'fixture',
-        runtime: runtime as never,
-        traces: { active: () => true, record: () => traces++ },
+        };
+        const curator = createPiMemoryCurator({
+          provider: 'openai',
+          model: 'gpt-6-luna',
+          apiKey: 'fixture',
+          runtime: runtime as never,
+          traces: { active: () => true, record: () => traces++ },
+        });
+        const run = () =>
+          curator.curate(
+            {
+              task,
+              instructions: 'Choose a fixed task category.',
+              input: { request: 'Compare synthetic products' },
+            },
+            undefined,
+            (event) => usage.push(event),
+          );
+        if (result === 'stop') assert.deepEqual(await run(), { task_type: 'research' });
+        else await assert.rejects(run(), /classification model is unavailable|Synthetic transport/);
+        assert.equal(calls, 1);
+        assert.equal(usage.length, 1);
+        assert.equal(traces, 0);
       });
-      const run = () =>
-        curator.curate(
-          {
-            task: 'classify',
-            instructions: 'Choose a fixed task category.',
-            input: { request: 'Compare synthetic products' },
-          },
-          undefined,
-          (event) => usage.push(event),
-        );
-      if (result === 'stop') assert.deepEqual(await run(), { task_type: 'research' });
-      else await assert.rejects(run(), /classification model is unavailable|Synthetic transport/);
-      assert.equal(calls, 1);
-      assert.equal(usage.length, 1);
-      assert.equal(traces, 0);
-    });
 });
 
 test('action review failures identify the task, model, provider, and bounded provider reason', async (t) => {
@@ -9169,4 +9175,67 @@ test('invalid tool calls stop before another model request and a valid repair re
         }
       }
     });
+});
+
+test('preparation reserves model cost before dispatch and blocks a request without a price', async () => {
+  for (const price of ['known', 'missing', 'negative']) {
+    const priced = price === 'known';
+    let calls = 0;
+    let reservations = 0;
+    const settlements: Array<number | null> = [];
+    const base = smallContextAccess('compatible', 'fixture-budget', 8192);
+    const access: ModelAccess = {
+      ...base,
+      definition: {
+        ...base.definition!,
+        spec: {
+          ...base.definition!.spec,
+          cost: priced
+            ? { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 2 }
+            : {
+                input: price === 'negative' ? -1 : 0,
+                output: price === 'negative' ? 2 : 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+              },
+        },
+      },
+      reserve: async (estimate) => {
+        const maximum = typeof estimate === 'function' ? estimate() : estimate;
+        reservations++;
+        assert.equal(calls, 0);
+        if (!priced) {
+          assert.equal(maximum, null);
+          throw new Error('Synthetic preparation price is unknown.');
+        }
+        assert.ok(maximum !== null && maximum > 0 && maximum < 0.02);
+        return async (spent) => {
+          settlements.push(spent);
+        };
+      },
+    };
+    const { runtime, model } = await createPiModelRuntime(access);
+    const result = await runtime.completeSimple(
+      model,
+      {
+        messages: [{ role: 'user', content: 'Synthetic budget check', timestamp: 1 }],
+      },
+      {
+        maxTokens: 100,
+        maxRetries: 0,
+        fetch: async () => {
+          calls++;
+          return Response.json(
+            { error: { message: 'Synthetic provider failure' } },
+            { status: 503 },
+          );
+        },
+      },
+    );
+    assert.equal(reservations, 1);
+    assert.equal(calls, priced ? 1 : 0);
+    assert.equal(result.stopReason, 'error');
+    assert.equal(settlements.length, priced ? 1 : 0);
+    if (!priced) assert.match(result.errorMessage!, /Synthetic preparation price is unknown/);
+  }
 });
