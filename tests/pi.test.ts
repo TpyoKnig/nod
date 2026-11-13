@@ -7581,6 +7581,10 @@ test('failed model requests keep unknown costs and remain separate from their re
     ],
   );
   assert.equal(new Set(reports.map((report) => report.id)).size, 2);
+  assert.deepEqual(
+    reports.map((report) => report.attempt),
+    [1, 2],
+  );
   runtime.completeSimple = async () => {
     throw new Error('Synthetic transport failure');
   };
@@ -7595,6 +7599,7 @@ test('failed model requests keep unknown costs and remain separate from their re
   assert.equal(reports.length, 3);
   assert.equal(reports[2].costUsd, null);
   assert.equal(reports[2].status, 'failed');
+  assert.equal(reports[2].attempt, 1);
 });
 
 test('subscription image analysis retains an API-price estimate for the task check-in', async (t) => {
