@@ -3,8 +3,11 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-const autostartEntry =
-  '[Desktop Entry]\nType=Application\nName=Nod\nExec=flatpak run io.n8n.Nod\nX-Flatpak=io.n8n.Nod\n';
+const flatpak = () => process.env.FLATPAK_ID === 'io.n8n.Nod';
+const autostartEntry = () =>
+  flatpak()
+    ? '[Desktop Entry]\nType=Application\nName=Nod\nExec=flatpak run io.n8n.Nod\nX-Flatpak=io.n8n.Nod\n'
+    : '[Desktop Entry]\nType=Application\nName=Nod\nExec=nod\n';
 const autostartPath = () =>
   join(
     process.env.HOST_XDG_CONFIG_HOME || join(homedir(), '.config'),
@@ -18,7 +21,7 @@ export function opensAtLogin() {
     return process.platform === 'win32' ? login.executableWillLaunchAtLogin : login.openAtLogin;
   }
   try {
-    return readFileSync(autostartPath(), 'utf8') === autostartEntry;
+    return readFileSync(autostartPath(), 'utf8') === autostartEntry();
   } catch {
     return false;
   }
@@ -27,7 +30,8 @@ export function opensAtLogin() {
 export function setOpenAtLogin(open) {
   if (process.platform !== 'linux') return app.setLoginItemSettings({ openAtLogin: open });
   if (!open) return rmSync(autostartPath(), { force: true });
-  if (process.env.FLATPAK_ID !== 'io.n8n.Nod') throw new Error('Open at login needs the Flatpak.');
+  if (!flatpak() && process.env.NOD_PACKAGE !== 'rpm')
+    throw new Error('Open at login needs the Flatpak or the RPM package.');
   mkdirSync(dirname(autostartPath()), { recursive: true });
-  writeFileSync(autostartPath(), autostartEntry);
+  writeFileSync(autostartPath(), autostartEntry());
 }
