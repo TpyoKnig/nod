@@ -12,7 +12,7 @@ import graduationCapIcon from '../assets/landing/graduation-cap.svg?url';
 import downloadIcon from '../assets/landing/download.svg?url';
 import nodMark from '../assets/landing/nod-mark.svg?url';
 import heroCollage from '../assets/landing/hero-collage.png';
-import heroVideoPoster from '../assets/landing/hero-video-poster.jpg';
+import heroVideoPoster from '../assets/landing/hero-video-poster.png';
 import demoAv1 from '../assets/video/nod-demo-1080.av1.mp4?url';
 import demoAv1Small from '../assets/video/nod-demo-720.av1.mp4?url';
 import demoHevc from '../assets/video/nod-demo-1080.hevc.mp4?url';
@@ -38,10 +38,6 @@ const description =
 const url = 'https://nod.n8n.io/';
 const image = new URL(socialImage.src, Astro.site);
 const photo = { formats: ['webp'], fallbackFormat: 'jpg', quality: 80, alt: '', class: 'bg' } as const;
-const stars = await fetch('https://api.github.com/repos/n8n-io/nod')
-  .then((response) => (response.ok ? response.json() : null))
-  .then((repo) => repo?.stargazers_count?.toLocaleString('en-US'))
-  .catch(() => null);
 const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
 ---
 
@@ -78,38 +74,19 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
     <div class="lp-page">
       <header class="lp-header">
         <div class="lp-brand">
-          <span class="lp-brand-name"
-            ><span class="lp-sr">Nod</span><span class="lp-wordmark" aria-hidden="true"
-              >N<span class="lp-hero-glyph"
-                ><svg viewBox="0 0 21 21" style="display:block;overflow:visible"
-                  ><circle cx="9" cy="12" r="7.375" fill="none" stroke="#191919" stroke-width="3.25"></circle><circle
-                    cx="17"
-                    cy="4"
-                    r="3.45"
-                    fill="#ff91ac"></circle></svg
-                ></span
-              >d</span
-            ></span
+          <a class="lp-brand-logo" href={n8n} target="_blank" rel="noopener"
+            ><img src={n8nLogo} alt="n8n" width="100" height="20" /></a
           >
-          <a class="lp-brand-by" href={n8n} target="_blank" rel="noopener"
-            >by <img src={n8nLogo} alt="n8n" width="75" height="15" /></a
-          >
-          <span class="lp-brand-badge mono">Research preview</span>
+          <span class="lp-brand-badge mono">Labs</span>
         </div>
         <div class="lp-header-right">
           <a class="lp-header-link mono" href={base}>Docs</a>
-          <a
-            class="lp-capsule lp-star gray-tertiary mono"
-            href={github}
-            target="_blank"
-            rel="noopener"
+          <a class="lp-capsule lp-header-github gray-tertiary mono" href={github} target="_blank" rel="noopener"
             ><svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true"
-              ><path
-                fill="currentColor"
-                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
-              ></path></svg
-            ><span>Star</span>{stars && <span class="lp-star-count">{stars}</span>}</a
+              ><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg
+            ><span>GitHub</span></a
           >
+          <a class="lp-download-btn lp-header-download mono" href={installGuide} data-download>Download</a>
         </div>
       </header>
 
@@ -170,7 +147,7 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
               <Image
                 src={heroVideoPoster}
                 alt=""
-                widths={[640, 960, 1280, 1920]}
+                widths={[640, 960, 1280, 1920, 2560]}
                 sizes="(min-width: 1440px) 1232px, 88vw"
                 format="webp"
                 quality={80}
@@ -671,11 +648,6 @@ const panelSizes = '(min-width: 1440px) 808px, (min-width: 1100px) 56vw, 92vw';
       <section class="lp-hard-ones-heading">
         <div class="lp-hard-ones-frame final lp-dot-grid-bg">
           <h2>Give Nod its first job</h2>
-        </div>
-      </section>
-
-      <section class="lp-final-cta">
-        <div class="lp-cta-frame">
           <a class="lp-download-btn lp-final-cta-btn mono" href={installGuide} data-download><img class="lp-btn-icon" src={downloadIcon} alt="" />Start nodding</a>
         </div>
       </section>
