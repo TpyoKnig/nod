@@ -171,7 +171,7 @@ flowchart TB
 
 - **Run while your machine is asleep.** Hosted, so the morning brief still arrives.
 - **Make phone calls.** For the errands that still need a voice.
-- **One Nod for your team.** Share one Nod, with its apps and memory, across a few people.
+- **Nod for your team.** Share one Nod, with its apps and memory.
 - **Make it your own.** Add your own skills and tools without touching the core.
 
 <br />
