@@ -19,6 +19,7 @@ on:
   pull_request:
     paths:
       - 'desktop/flatpak/**'
+      - 'desktop/rpm/**'
       - 'desktop/scripts/*linux*.mjs'
       - 'desktop/test/*linux*.test.mjs'
 
@@ -138,6 +139,21 @@ jobs:
             dist/desktop/linux-x64/release-linux-x64.json
             dist/desktop/linux-x64/SHA256SUMS-linux-x64
             dist/desktop/linux-x64/nod-linux-x64.flatpak.part*
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+      - name: Build and install the Fedora RPM
+        if: inputs.source == ''
+        run: |
+          docker run --rm -e NOD_DESKTOP_VERSION -v "$PWD:$PWD" -w "$PWD" registry.fedoraproject.org/fedora:45 desktop/rpm/build-rpm.sh
+      - name: Save the Fedora RPM
+        if: inputs.source == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: desktop-linux-x64-rpm
+          path: |
+            dist/desktop/rpm/nod-linux-x64.rpm
+            dist/desktop/rpm/SHA256SUMS-linux-x64-rpm
           compression-level: 0
           retention-days: 3
           if-no-files-found: error

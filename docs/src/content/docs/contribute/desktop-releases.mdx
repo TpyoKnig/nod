@@ -333,6 +333,14 @@ Official Linux builds use the `release` environment on `main`. Like Mac and Wind
 
 The published bundles have no Nod update repository and are not on Flathub. Users install the next bundle to update Nod. `flatpak update` can update the shared desktop runtime, but it does not fetch new Nod bundles.
 
+## Build a Fedora RPM
+
+**Build Linux desktop** also builds an x64 RPM when you run it from **Actions** or for a pull request that touches `desktop/rpm/**`. It runs in a `fedora:45` container, installs the RPM with `dnf` and checks that the app's libraries resolve, that QEMU, `qemu-img` and `ssh` are installed, that `chrome-sandbox` is setuid and that the server imports and native image library load. The `desktop-linux-x64-rpm` artifact holds `nod-linux-x64.rpm` and its checksum. Release runs skip this step, and the RPM is not published with a release.
+
+The RPM installs the app in `/usr/lib/nod` and depends on Fedora's own `qemu-system-x86-core`, `qemu-img` and `openssh-clients` instead of bundling them, so Lima uses Fedora's QEMU. The runtime pack stays inside the RPM. Fedora 45 ships QEMU 11.1.2. Fedora 44 ships 10.2.2, which CI does not test. The check does not start the VM, because the runner has no KVM, so start a local assistant on a Fedora desktop before distributing it. Open at login writes an autostart entry that runs `nod`.
+
+To build locally, package the app as for the Flatpak, then run `NOD_DESKTOP_VERSION=<version> desktop/rpm/build-rpm.sh` as root in a Fedora container with the repository mounted.
+
 ## Signing limits
 
 Mac builds are signed with n8n's Developer ID and notarized by Apple. Windows builds are signed by n8n GmbH with Artifact Signing. SmartScreen can still warn about a new release until Windows trusts its reputation.
