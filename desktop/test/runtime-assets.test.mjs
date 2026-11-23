@@ -1750,8 +1750,38 @@ test('all four checked bundles publish together as one regular Nod release', asy
       version: f.metadata.version,
       source: f.source,
       commit: 'c'.repeat(64),
-      partBytes: 16,
+      partBytes: 64,
     });
+    const linuxRuntimeBytes = Buffer.from('Synthetic Linux runtime archive');
+    const linuxRuntimeDirectory = join(f.assets, 'linux-x64');
+    await mkdir(linuxRuntimeDirectory, { recursive: true });
+    const linuxRuntimeFiles = [
+      'docker-guest.tar.gz',
+      'docker-host/docker/docker',
+      'lima/bin/limactl',
+      'lima/share/lima/lima-guestagent.Linux-x86_64.gz',
+      'manifest.json',
+    ].map((path) => ({ path, bytes: 1, mode: 0o644, sha256: f.digest(path) }));
+    const linuxRuntimeId = f.digest(JSON.stringify(linuxRuntimeFiles));
+    const linuxRuntimeArchiveName = `nod-Runtime-linux-x64-${linuxRuntimeId.slice(0, 12)}.tar.gz`;
+    const linuxRuntime = {
+      version: 1,
+      platform: 'linux-x64',
+      id: linuxRuntimeId,
+      fingerprint: f.digest('Synthetic Linux runtime inputs'),
+      archive: {
+        file: linuxRuntimeArchiveName,
+        bytes: linuxRuntimeBytes.length,
+        sha256: f.digest(linuxRuntimeBytes),
+      },
+      files: linuxRuntimeFiles,
+      url: `https://github.com/synthetic/nod/releases/download/${f.appTag}/${linuxRuntimeArchiveName}`,
+    };
+    await writeFile(join(linuxRuntimeDirectory, linuxRuntimeArchiveName), linuxRuntimeBytes);
+    await writeFile(
+      join(linuxRuntimeDirectory, 'runtime-release.json'),
+      JSON.stringify(linuxRuntime),
+    );
     const names = [
       'release.json',
       'runtime-release.json',
@@ -1929,6 +1959,14 @@ test('all four checked bundles publish together as one regular Nod release', asy
       await assert.rejects(f.invoke('draft-all'), /Linux release does not match/);
       assert.equal((await f.readState()).created, 0);
       await writeFile(linuxManifestPath, linuxManifest);
+      const linuxRuntimePath = join(linuxRuntimeDirectory, 'runtime-release.json');
+      await writeFile(
+        linuxRuntimePath,
+        JSON.stringify({ ...linuxRuntime, url: linuxRuntime.url.replace(f.appTag, 'nod-v0.0.1') }),
+      );
+      await assert.rejects(f.invoke('draft-all'), /Linux runtime descriptor does not match/);
+      assert.equal((await f.readState()).created, 0);
+      await writeFile(linuxRuntimePath, JSON.stringify(linuxRuntime));
       assert(subjects.includes('nod-install.sh'));
       assert(subjects.includes('nod-install.ps1'));
       await writeFile(join(intel, 'nod-x64.zip'), 'Corrupt Intel ZIP');
@@ -1953,7 +1991,7 @@ test('all four checked bundles publish together as one regular Nod release', asy
         win.installer.file,
         win.runtime.file,
         'nod-linux-x64.flatpak.part00',
-        'nod-linux-x64.flatpak.part01',
+        linuxRuntimeArchiveName,
       ]) {
         await f.writeState({ ...(await f.readState()), corruptDownload: name });
         await assert.rejects(f.invoke('draft-all'), /failed its checksum/);
@@ -2047,7 +2085,7 @@ test('all four checked bundles publish together as one regular Nod release', asy
       'release-linux-x64.json',
       'SHA256SUMS-linux-x64',
       'nod-linux-x64.flatpak.part00',
-      'nod-linux-x64.flatpak.part01',
+      linuxRuntimeArchiveName,
       ...(!reusedRuntime ? [runtime.archive.file, f.release.archive.file] : []),
       win.runtime.file,
       windowsManifest,

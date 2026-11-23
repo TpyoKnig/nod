@@ -37,6 +37,13 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
+test ! -e /usr/lib/nod/resources/engine/runtime-assets
+ELECTRON_RUN_AS_NODE=1 /usr/lib/nod/nod --input-type=module -e '
+  const { runtimeRelease } = await import("/usr/lib/nod/resources/engine/desktop/runtime/assets.mjs");
+  const release = await runtimeRelease("/usr/lib/nod/resources/engine");
+  if (release?.platform !== "linux-x64") throw new Error("The packaged runtime release is missing or not for linux-x64.");
+'
+
 cd /usr/lib/nod/resources/engine
 ELECTRON_RUN_AS_NODE=1 /usr/lib/nod/nod --input-type=module -e '
   const { register } = await import("tsx/esm/api");

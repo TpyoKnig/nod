@@ -127,7 +127,7 @@ The Linux x64 app is a Flatpak preview. It needs a 64-bit Intel or AMD computer,
      flatpak install --user ./nod-linux-x64.flatpak
    ```
 
-4. Open **Nod** from your application menu, or run `flatpak run io.n8n.Nod`. Choose **Get started** for a local assistant or **Connect to a server** for an existing one. The bundle includes Nod's private computer runtime. Flatpak can also download its desktop runtime during installation.
+4. Open **Nod** from your application menu, or run `flatpak run io.n8n.Nod`. Choose **Get started** for a local assistant or **Connect to a server** for an existing one. For a local assistant, Nod downloads its private computer runtime now, the same way as on a Mac or Windows. Flatpak can also download its desktop runtime during installation.
 
 5. Keep your secret store unlocked during setup. After setup, choose **Enable notifications** if you want alerts. **Open at login** uses your desktop's autostart folder. See [Your first conversation](/get-started/first-conversation/).
 
@@ -159,7 +159,7 @@ These controls change the same app zoom as **View → Zoom Out** and **View → 
 
 ## Update Nod
 
-On Linux, quit Nod, then download, check, and install the next bundle with the [Linux procedure](#linux). Your profile and private computer stay in place. These bundles have no update repository. `flatpak update` can update shared desktop runtimes, but it does not fetch a new Nod bundle. Nod's own update checks are off on Linux. The rest of this section applies to Mac and Windows.
+On Linux, quit Nod, then download, check, and install the next bundle with the [Linux procedure](#linux). Your profile and private computer stay in place. These bundles have no update repository. `flatpak update` can update shared desktop runtimes, but it does not fetch a new Nod bundle. Nod's own update checks are off on Linux. If the new bundle needs a different private computer runtime, Nod downloads it on the next local launch. The rest of this section applies to Mac and Windows.
 
 Nod checks for updates after it starts, every six hours while it's open, and after your computer wakes if a check is due. Checks continue when an update is already downloaded, so a newer release can replace it before you restart.
 
@@ -199,7 +199,7 @@ Nod starts with a fresh profile and doesn't import data from a source install.
 | Private computer      | `~/.nod-desktop/<profile id>`                      | A WSL distribution named `nod-<profile id>` |
 | Saved keys            | Encrypted with the macOS key store                 | Encrypted with Windows DPAPI                |
 
-On Linux, app data and settings are in `~/.var/app/io.n8n.Nod/config/nod/profiles/local`. The private computer is in `~/.nod-desktop/<profile id>`. Your desktop's Secret Service protects saved keys. The Flatpak contains Nod's runtime pack.
+On Linux, app data and settings are in `~/.var/app/io.n8n.Nod/config/nod/profiles/local`. The private computer is in `~/.nod-desktop/<profile id>`. Your desktop's Secret Service protects saved keys. For a local assistant, Nod downloads a runtime pack to `~/.var/app/io.n8n.Nod/data/nod/runtime`, the same way as on a Mac.
 
 ## Remove Nod
 
@@ -209,9 +209,9 @@ Moving Nod to the Trash or uninstalling it keeps your data, so a later install o
 2. Review the warning, then confirm. It lists what Nod will delete and explains that you must complete setup again. Nod deletes your profile and private computer, then restarts and opens setup. The app stays installed.
 3. To remove the app too, quit Nod. Move it to the Trash on a Mac, uninstall it in **Settings → Apps** on Windows, or run `flatpak uninstall --delete-data io.n8n.Nod` on Linux.
 
-On Linux, uninstalling the Flatpak alone leaves the private computer in `~/.nod-desktop`. Use **Remove all data** first to delete it safely.
+On Linux, uninstalling the Flatpak alone leaves the private computer in `~/.nod-desktop`. Use **Remove all data** first to delete it safely. Either way, Nod keeps the runtime pack; delete `~/.var/app/io.n8n.Nod/data/nod/runtime` to remove it too.
 
-On a Mac, Nod keeps the runtime it downloaded, so a new install doesn't download it again, and its entry in the key store. Neither holds your data. Apps you connected may still list Nod until you remove it there.
+On a Mac and Linux, Nod keeps the runtime it downloaded, so a new install doesn't download it again, and its entry in the key store. Neither holds your data. Apps you connected may still list Nod until you remove it there.
 
 If you deleted Nod's folders by hand, Nod removes the private computer they leave behind the next time it opens.
 

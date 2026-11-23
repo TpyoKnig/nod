@@ -24,6 +24,7 @@ import {
   releaseVideo,
 } from './prepare-desktop-release.mjs';
 import { linuxReleaseFiles } from '../../desktop/scripts/linux-release.mjs';
+import { runtimeRelease } from '../../desktop/runtime/assets.mjs';
 
 const root = process.cwd();
 const runtimeDirectory = join(root, '.local/desktop-runtime-release');
@@ -950,9 +951,26 @@ async function draftAll({ stageOnly = false } = {}) {
   const source = sourceRevision;
   if (!shaPattern.test(source) || run('git', ['rev-parse', 'HEAD']) !== source)
     throw new Error('Invalid source revision.');
+  const tag = `nod-v${version}`;
   const windows = join(root, 'dist/desktop/win32-x64');
   const linuxFiles = await linuxReleaseFiles(root, { version, source });
   const linux = JSON.parse(await readFile(linuxFiles[0], 'utf8'));
+  const linuxRuntimeDirectory = join(runtimeDirectory, 'linux-x64');
+  const linuxRuntime = await runtimeRelease(linuxRuntimeDirectory);
+  const linuxBaseUrl = `https://github.com/${runtimeRepository}/releases/download/${tag}`;
+  if (
+    linuxRuntime?.platform !== 'linux-x64' ||
+    !/^nod-Runtime-linux-x64-[a-f0-9]{12}\.tar\.gz$/.test(linuxRuntime.archive.file || '') ||
+    linuxRuntime.archive.bytes >= maximumAssetBytes ||
+    linuxRuntime.url !== `${linuxBaseUrl}/${linuxRuntime.archive.file}`
+  )
+    throw new Error('The published Linux runtime descriptor does not match this release.');
+  const linuxRuntimeArchive = join(linuxRuntimeDirectory, linuxRuntime.archive.file);
+  if (
+    (await hash(linuxRuntimeArchive)) !== linuxRuntime.archive.sha256 ||
+    (await stat(linuxRuntimeArchive)).size !== linuxRuntime.archive.bytes
+  )
+    throw new Error('The Linux runtime archive does not match its descriptor.');
   const metadata = JSON.parse(await readFile(join(windows, 'release-win32-x64.json'), 'utf8'));
   const receipt = JSON.parse(await readFile(join(windows, 'windows-check.json'), 'utf8'));
   const appRepo = api(`repos/${releaseRepository}`, releaseRepository);
@@ -1037,7 +1055,6 @@ async function draftAll({ stageOnly = false } = {}) {
     );
     appAssets.push(app.disk, app.update);
   }
-  const tag = `nod-v${version}`;
   const marker = `Source: https://github.com/${sourceRepository}/commit/${source}`;
   const sum = join(windows, 'SHA256SUMS-win32-x64');
   await copyFile(join(windows, 'SHA256SUMS'), sum);
@@ -1048,6 +1065,7 @@ async function draftAll({ stageOnly = false } = {}) {
   const files = [
     ...appFiles.values(),
     ...linuxFiles,
+    linuxRuntimeArchive,
     ...['nod-Setup-x64.exe', 'nod-Runtime-win32-x64.tar.gz', 'release-win32-x64.json'].map((name) =>
       join(windows, name),
     ),
@@ -1070,7 +1088,7 @@ async function draftAll({ stageOnly = false } = {}) {
     `https://github.com/${releaseRepository}/releases/download/${tag}/${file}`;
   if (verifiedFiles.length > 30)
     throw new Error('A desktop release must keep at most 30 assets for installed app updates.');
-  const details = `### Downloads\n\n- [Mac Intel](${download('nod-x64.dmg')})\n- [Mac ARM](${download('nod-arm64.dmg')})\n- [Windows](${download('nod-Setup-x64.exe')})\n- [Linux x64 Flatpak (preview)](https://nod.n8n.io/docs/get-started/install-desktop/#linux)\n\nMac requires macOS 14 or later. Windows requires Windows 11 with WSL 2. Linux needs Flatpak and a desktop secret store. A local Linux assistant also needs KVM. To install, follow the [install guide](https://nod.n8n.io/docs/get-started/install-desktop/). Mac and Windows apps update themselves and download their runtime on first launch. Linux includes the runtime; install the next bundle to update. Join all nod-linux-x64.flatpak.partNN files before installation, then check SHA256SUMS-linux-x64.\n\nMac builds use ${signingMode === 'self-signed' ? 'the internal signing certificate' : 'Developer ID signing and Apple notarization'}. Windows builds are signed by n8n GmbH. Linux bundle parts have checksums. Public releases include build provenance.\n\n${prepared.notes.trimEnd()}\n\n${marker}\n`;
+  const details = `### Downloads\n\n- [Mac Intel](${download('nod-x64.dmg')})\n- [Mac ARM](${download('nod-arm64.dmg')})\n- [Windows](${download('nod-Setup-x64.exe')})\n- [Linux x64 Flatpak (preview)](https://nod.n8n.io/docs/get-started/install-desktop/#linux)\n\nMac requires macOS 14 or later. Windows requires Windows 11 with WSL 2. Linux needs Flatpak and a desktop secret store. A local Linux assistant also needs KVM. To install, follow the [install guide](https://nod.n8n.io/docs/get-started/install-desktop/). Mac, Windows and Linux apps download their runtime on first launch. Mac and Windows apps update themselves; Linux updates by installing the next bundle. Join all nod-linux-x64.flatpak.partNN files before installation, then check SHA256SUMS-linux-x64.\n\nMac builds use ${signingMode === 'self-signed' ? 'the internal signing certificate' : 'Developer ID signing and Apple notarization'}. Windows builds are signed by n8n GmbH. Linux bundle parts have checksums. Public releases include build provenance.\n\n${prepared.notes.trimEnd()}\n\n${marker}\n`;
   const notes = publicReleaseNotes(
     prepared,
     details,
@@ -1086,6 +1104,7 @@ async function draftAll({ stageOnly = false } = {}) {
   });
   const expected = [
     ...linuxFiles.map((file) => basename(file)),
+    linuxRuntime.archive.file,
     'nod-arm64.dmg',
     'nod-x64.dmg',
     'nod-Setup-x64.exe',
@@ -1112,7 +1131,13 @@ async function draftAll({ stageOnly = false } = {}) {
     )
   )
     throw new Error('The release draft contains assets outside the checked build.');
-  await verifyDownloads(tag, [...appAssets, metadata.installer, metadata.runtime, ...linux.parts]);
+  await verifyDownloads(tag, [
+    ...appAssets,
+    metadata.installer,
+    metadata.runtime,
+    linuxRuntime.archive,
+    ...linux.parts,
+  ]);
   if (process.env.NOD_PUBLISH_RELEASE === 'true') {
     requireUpdateSourceVisibility(process.env.NOD_DESKTOP_UPDATE_SOURCE_URL);
     publishRelease(releaseRepository, tag);

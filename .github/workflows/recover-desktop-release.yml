@@ -97,6 +97,7 @@ jobs:
               mv ".local/desktop-release-artifacts/desktop-runtime-pack-$arch" ".local/desktop-runtime-release/$arch"
             fi
           done
+          mv ".local/desktop-release-artifacts/desktop-runtime-pack-linux-x64" ".local/desktop-runtime-release/linux-x64"
           node ../publisher/.github/scripts/desktop-release-recovery.mjs bind
       - name: Select the original build provenance
         id: provenance
