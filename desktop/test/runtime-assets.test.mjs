@@ -25,7 +25,7 @@ import {
 import { createServer } from 'node:net';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { Readable } from 'node:stream';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, join, posix, relative, resolve } from 'node:path';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
@@ -42,6 +42,7 @@ import {
   findRuntimeAssets,
   installRuntimeArchive,
   openRuntimeAssets,
+  runtimeCacheDirectory,
   seedRuntimeCache,
 } from '../runtime/assets.mjs';
 import {
@@ -60,6 +61,16 @@ import { run, verifyDiskImage, verifyRuntimeRelease } from '../scripts/release-t
 import { draftServerRelease } from '../../.github/scripts/server-release.mjs';
 import { imageIdentities } from '../../deployment/self-host/image-identities.mjs';
 import { packageLinuxBundle } from '../scripts/linux-release.mjs';
+
+test('Linux keeps the runtime cache in the XDG data directory', () => {
+  const home = join(homedir(), '.local/share/nod/runtime');
+  assert.equal(
+    runtimeCacheDirectory('linux', { XDG_DATA_HOME: '/var/app/data' }),
+    '/var/app/data/nod/runtime',
+  );
+  assert.equal(runtimeCacheDirectory('linux', { XDG_DATA_HOME: 'relative' }), home);
+  assert.equal(runtimeCacheDirectory('linux', {}), home);
+});
 
 const syntheticVideoUrl =
   'https://github.com/user-attachments/assets/11111111-1111-4111-8111-111111111111';
