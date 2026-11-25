@@ -958,8 +958,15 @@ async function draftAll({ stageOnly = false } = {}) {
   const linuxRuntimeDirectory = join(runtimeDirectory, 'linux-x64');
   const linuxRuntime = await runtimeRelease(linuxRuntimeDirectory);
   const linuxBaseUrl = `https://github.com/${runtimeRepository}/releases/download/${tag}`;
+  const linuxInputs = JSON.parse(
+    run(process.execPath, ['desktop/scripts/runtime-inputs.mjs'], {
+      env: { ...process.env, NOD_DESKTOP_TARGET: 'linux-x64' },
+    }),
+  );
   if (
     linuxRuntime?.platform !== 'linux-x64' ||
+    !hashPattern.test(linuxInputs.fingerprint) ||
+    linuxRuntime.fingerprint !== linuxInputs.fingerprint ||
     !/^nod-Runtime-linux-x64-[a-f0-9]{12}\.tar\.gz$/.test(linuxRuntime.archive.file || '') ||
     linuxRuntime.archive.bytes >= maximumAssetBytes ||
     linuxRuntime.url !== `${linuxBaseUrl}/${linuxRuntime.archive.file}`

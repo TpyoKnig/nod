@@ -26,6 +26,7 @@ import {
   hardenElectron,
   minimumSystemVersion as supportedMinimumSystemVersion,
   notarize,
+  resolveRuntimeDescriptor,
   run,
   signApplication,
   signingArguments,
@@ -49,18 +50,7 @@ const appSource = join(stage, 'app');
 const runtimeAssets = resolve(
   process.env.NOD_RUNTIME_ASSETS || join(root, '.local', 'desktop-runtime-assets'),
 );
-const descriptorOption = process.argv.indexOf('--runtime-descriptor');
-if (
-  descriptorOption >= 0 &&
-  (!process.argv[descriptorOption + 1] || process.argv[descriptorOption + 1].startsWith('--'))
-)
-  throw new Error('Pass the path to runtime-release.json after --runtime-descriptor.');
-const runtimeRelease = resolve(
-  root,
-  descriptorOption < 0
-    ? join(root, '.local', 'desktop-runtime-release', 'runtime-release.json')
-    : process.argv[descriptorOption + 1],
-);
+const runtimeRelease = resolveRuntimeDescriptor(root, process.argv);
 const full = process.argv.includes('--full');
 const signed = process.argv.includes('--release');
 const skipArchive = process.argv.includes('--no-runtime-archive');
@@ -70,8 +60,6 @@ if (signed && (full || stageOnly))
 if (full && skipArchive) throw new Error('Full builds cannot omit their runtime assets.');
 if (process.platform !== 'darwin' || !['arm64', 'x64'].includes(process.arch))
   throw new Error('This desktop build requires an Intel or Apple Silicon Mac.');
-if (basename(runtimeRelease) !== 'runtime-release.json')
-  throw new Error('The runtime descriptor must be named runtime-release.json.');
 
 const signing = signed ? signingConfiguration() : undefined;
 const configuration = JSON.parse(await readFile(join(desktop, 'package.json'), 'utf8'));

@@ -49,10 +49,11 @@ export async function linuxReleaseFiles(root, { version, source }) {
     manifest.bundle?.file !== bundleName ||
     !digestPattern.test(manifest.bundle.sha256 || '') ||
     !Number.isSafeInteger(manifest.bundle.bytes) ||
-    manifest.bundle.bytes <= 0 ||
-    manifest.bundle.bytes > sizeLimit
+    manifest.bundle.bytes <= 0
   )
     throw new Error('The Linux release does not match its source or Flatpak commit.');
+  if (manifest.bundle.bytes > sizeLimit)
+    throw new Error('The Linux bundle must fit in one release file of at most 1900 MiB.');
   const path = join(directory, bundleName);
   if (
     (await stat(path)).size !== manifest.bundle.bytes ||

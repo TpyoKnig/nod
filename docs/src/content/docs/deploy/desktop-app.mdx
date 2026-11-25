@@ -178,7 +178,7 @@ Windows file permissions protect the profile folder. Uninstalling removes the ap
 | Private VM, database, workspace | `~/.nod-desktop/<profile>`                                                                                   |
 | Runtime packs                   | `$XDG_DATA_HOME/nod/runtime/<release>`, or `~/.var/app/io.n8n.Nod/data/nod/runtime/<release>` in the Flatpak |
 
-To remove Nod completely, choose **Remove all data** first, then run `flatpak uninstall --delete-data io.n8n.Nod`. If you only uninstall, the private computer stays in `~/.nod-desktop`. Either way, Nod keeps the runtime packs; delete `~/.var/app/io.n8n.Nod/data/nod/runtime` to remove them too.
+To remove Nod completely, choose **Remove all data** first, then run `flatpak uninstall --delete-data io.n8n.Nod`. If you only uninstall, the private computer stays in `~/.nod-desktop` and the runtime packs stay too. `--delete-data` removes the runtime packs along with the rest of the app's data directory.
 
 </TabItem>
 </Tabs>

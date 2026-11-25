@@ -274,7 +274,7 @@ Actionlint 1.7.12 [does not yet accept GitHub's `queue` key](https://github.com/
 
 Nod keeps no Git notes. Push and manual CI runs on `main` delete any `refs/notes/*` ref on GitHub, such as the AI authorship notes that [git-ai](https://usegitai.com) pushes after each `git push`. GitHub can't block notes refs, and git-ai skips Git hooks, so don't run tools that push notes in this repository.
 
-Pull requests that change Linux build inputs also run **Build Linux desktop**. It builds and installs the Linux x64 Flatpak preview, checks the engine and the bundle, and uploads the files.
+Pull requests that change Linux build inputs also run **Build Linux desktop**. It builds and installs the Linux x64 Flatpak preview, checks the engine and the bundle, builds, installs and uploads the Fedora RPM, and uploads the Flatpak files.
 
 **Build desktop release** packages all desktop apps before publication. It checks Mac updates, signature rejection and profile preservation on both Mac architectures. It also checks Windows workspace paths, installation, startup and updates, and requires the Linux build to pass. A failed check blocks publication. See [Desktop releases](/contribute/desktop-releases/).
 

@@ -29,7 +29,6 @@ Requires:       libXScrnSaver
 Requires:       libnotify
 Requires:       xdg-utils
 Recommends:     gnome-keyring
-Recommends:     firefox
 
 %description
 Nod is a personal agent that works across your connected apps, a private
@@ -50,11 +49,11 @@ install -Dm644 %{nod_flatpak}/io.n8n.Nod.metainfo.xml %{buildroot}/usr/share/met
 install -Dm644 %{nod_assets}/nod-macos.svg %{buildroot}/usr/share/icons/hicolor/scalable/apps/io.n8n.Nod.svg
 chmod -R go-w %{buildroot}/usr/lib/nod
 chmod 755 %{buildroot}/usr/lib/nod
+chmod 4755 %{buildroot}/usr/lib/nod/chrome-sandbox
 
 %files
 /usr/bin/nod
 /usr/lib/nod
-%attr(4755,root,root) /usr/lib/nod/chrome-sandbox
 /usr/share/applications/io.n8n.Nod.desktop
 /usr/share/metainfo/io.n8n.Nod.metainfo.xml
 /usr/share/icons/hicolor/scalable/apps/io.n8n.Nod.svg

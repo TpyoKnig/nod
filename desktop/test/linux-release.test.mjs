@@ -44,6 +44,12 @@ test('Linux release bundle is checked and rejects changed or unrelated files', a
   await assert.rejects(linuxReleaseFiles(root, expected), /checksum/);
   await rm(files[2]);
   await assert.rejects(linuxReleaseFiles(root, expected), { code: 'ENOENT' });
+  await writeFile(
+    files[0],
+    JSON.stringify({ ...manifest, bundle: { ...manifest.bundle, bytes: 1900 * 1024 ** 2 + 1 } }),
+  );
+  await assert.rejects(linuxReleaseFiles(root, expected), /1900 MiB/);
+  await writeFile(files[0], original);
 });
 
 test('Linux download links lead supported desktops to installation instructions', async () => {

@@ -20,7 +20,6 @@ import { Readable, Transform, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { createGunzip } from 'node:zlib';
-import { Parser } from 'tar';
 
 const pending = new Map();
 const hashPattern = /^[a-f0-9]{64}$/;
@@ -445,6 +444,7 @@ function unpackRuntime(
           );
         },
       });
+      const { Parser } = await import('tar');
       const parser = new Parser({
         strict: true,
         onReadEntry(entry) {

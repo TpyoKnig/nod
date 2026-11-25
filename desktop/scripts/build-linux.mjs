@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { access, cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { packager } from '@electron/packager';
 import { copyEngineSource, verifyApplicationRuntime } from './engine-source.mjs';
@@ -11,6 +11,7 @@ import {
   copyAgentDesktop,
   desktopBuildOptions,
   hardenElectron,
+  resolveRuntimeDescriptor,
   run,
   sourceRevision,
 } from './release-tools.mjs';
@@ -27,21 +28,8 @@ const appSource = join(stage, 'app');
 const runtimeAssets = resolve(
   process.env.NOD_RUNTIME_ASSETS || join(root, '.local', 'desktop-runtime-assets'),
 );
-const descriptorOption = process.argv.indexOf('--runtime-descriptor');
-if (
-  descriptorOption >= 0 &&
-  (!process.argv[descriptorOption + 1] || process.argv[descriptorOption + 1].startsWith('--'))
-)
-  throw new Error('Pass the path to runtime-release.json after --runtime-descriptor.');
-const runtimeRelease = resolve(
-  root,
-  descriptorOption < 0
-    ? join(root, '.local', 'desktop-runtime-release', 'runtime-release.json')
-    : process.argv[descriptorOption + 1],
-);
+const runtimeRelease = resolveRuntimeDescriptor(root, process.argv);
 const full = process.argv.includes('--full');
-if (basename(runtimeRelease) !== 'runtime-release.json')
-  throw new Error('The runtime descriptor must be named runtime-release.json.');
 const platform = `linux-${process.arch}`;
 const buildOptions = desktopBuildOptions();
 

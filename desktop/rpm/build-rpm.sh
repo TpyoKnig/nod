@@ -54,4 +54,4 @@ ELECTRON_RUN_AS_NODE=1 /usr/lib/nod/nod --input-type=module -e '
   const sharp = (await import("sharp")).default;
   await sharp({ create: { width: 2, height: 2, channels: 4, background: "#ff0000" } }).png().toBuffer();
 '
-sha256sum "$output/nod-linux-x64.rpm" > "$output/SHA256SUMS-linux-x64-rpm"
+(cd "$output" && sha256sum "nod-linux-x64.rpm" > "SHA256SUMS-linux-x64-rpm")

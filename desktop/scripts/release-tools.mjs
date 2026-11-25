@@ -24,6 +24,24 @@ export async function hardenElectron(application) {
       throw new Error('The Electron production settings failed verification.');
 }
 
+export function resolveRuntimeDescriptor(root, argv) {
+  const descriptorOption = argv.indexOf('--runtime-descriptor');
+  if (
+    descriptorOption >= 0 &&
+    (!argv[descriptorOption + 1] || argv[descriptorOption + 1].startsWith('--'))
+  )
+    throw new Error('Pass the path to runtime-release.json after --runtime-descriptor.');
+  const path = resolve(
+    root,
+    descriptorOption < 0
+      ? join(root, '.local', 'desktop-runtime-release', 'runtime-release.json')
+      : argv[descriptorOption + 1],
+  );
+  if (basename(path) !== 'runtime-release.json')
+    throw new Error('The runtime descriptor must be named runtime-release.json.');
+  return path;
+}
+
 const directory = dirname(fileURLToPath(import.meta.url));
 
 export async function copyAgentDesktop(application, platform = 'darwin', arch = process.arch) {

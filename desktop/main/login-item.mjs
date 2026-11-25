@@ -10,7 +10,8 @@ const autostartEntry = () =>
     : '[Desktop Entry]\nType=Application\nName=Nod\nExec=nod\n';
 const autostartPath = () =>
   join(
-    process.env.HOST_XDG_CONFIG_HOME || join(homedir(), '.config'),
+    (flatpak() ? process.env.HOST_XDG_CONFIG_HOME : process.env.XDG_CONFIG_HOME) ||
+      join(homedir(), '.config'),
     'autostart',
     'io.n8n.Nod.desktop',
   );
