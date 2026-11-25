@@ -1750,7 +1750,6 @@ test('all four checked bundles publish together as one regular Nod release', asy
       version: f.metadata.version,
       source: f.source,
       commit: 'c'.repeat(64),
-      partBytes: 64,
     });
     const linuxRuntimeBytes = Buffer.from('Synthetic Linux runtime archive');
     const linuxRuntimeDirectory = join(f.assets, 'linux-x64');
@@ -1954,7 +1953,7 @@ test('all four checked bundles publish together as one regular Nod release', asy
       assert(subjects.includes(`${win.runtime.sha256}  ${win.runtime.file}\n`));
       const linuxManifestPath = join(target, 'linux-x64/release-linux-x64.json');
       const linuxManifest = await readFile(linuxManifestPath, 'utf8');
-      assert(subjects.includes('nod-linux-x64.flatpak.part00\n'));
+      assert(subjects.includes('nod-linux-x64.flatpak\n'));
       await writeFile(linuxManifestPath, linuxManifest.replace(f.source, 'd'.repeat(40)));
       await assert.rejects(f.invoke('draft-all'), /Linux release does not match/);
       assert.equal((await f.readState()).created, 0);
@@ -1990,7 +1989,7 @@ test('all four checked bundles publish together as one regular Nod release', asy
         'nod-x64.zip',
         win.installer.file,
         win.runtime.file,
-        'nod-linux-x64.flatpak.part00',
+        'nod-linux-x64.flatpak',
         linuxRuntimeArchiveName,
       ]) {
         await f.writeState({ ...(await f.readState()), corruptDownload: name });
@@ -2084,7 +2083,7 @@ test('all four checked bundles publish together as one regular Nod release', asy
       'nod-Setup-x64.exe',
       'release-linux-x64.json',
       'SHA256SUMS-linux-x64',
-      'nod-linux-x64.flatpak.part00',
+      'nod-linux-x64.flatpak',
       linuxRuntimeArchiveName,
       ...(!reusedRuntime ? [runtime.archive.file, f.release.archive.file] : []),
       win.runtime.file,

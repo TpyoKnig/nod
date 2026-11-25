@@ -18,41 +18,32 @@ test('desktop release metadata keeps the trace token and release flag together',
   assert.throws(() => desktopBuildOptions({ NOD_TRACES_TOKEN: 'invalid token' }), /URL-safe/);
 });
 
-test('Linux release parts preserve the bundle and reject missing, changed or unrelated files', async (t) => {
+test('Linux release bundle is checked and rejects changed or unrelated files', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'nod-linux-release-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const bundle = join(root, 'synthetic.flatpak');
-  const bytes = Buffer.from('Synthetic Flatpak bundle with several parts.');
+  const bytes = Buffer.from('Synthetic Flatpak bundle.');
   await writeFile(bundle, bytes);
   const expected = { version: '0.6.3', source: 'a'.repeat(40) };
-  await packageLinuxBundle({ root, bundle, ...expected, commit: 'b'.repeat(64), partBytes: 24 });
+  await packageLinuxBundle({ root, bundle, ...expected, commit: 'b'.repeat(64) });
   const files = await linuxReleaseFiles(root, expected);
   const manifest = JSON.parse(await readFile(files[0], 'utf8'));
-  assert.equal(manifest.parts.length, 2);
-  assert.deepEqual(
-    Buffer.concat(await Promise.all(files.slice(2).map((file) => readFile(file)))),
-    bytes,
-  );
+  assert.deepEqual(await readFile(files[2]), bytes);
   const original = await readFile(files[0]);
   for (const change of [
     { source: 'c'.repeat(40) },
     { commit: '' },
     { bundle: { ...manifest.bundle, sha256: 'c'.repeat(64) } },
-    { parts: [{ ...manifest.parts[0], file: '../outside' }, ...manifest.parts.slice(1)] },
-    { parts: [...manifest.parts].reverse() },
+    { bundle: { ...manifest.bundle, file: '../outside' } },
   ]) {
     await writeFile(files[0], JSON.stringify({ ...manifest, ...change }));
     await assert.rejects(linuxReleaseFiles(root, expected));
   }
   await writeFile(files[0], original);
-  await writeFile(files[2], Buffer.alloc(24));
+  await writeFile(files[2], Buffer.alloc(bytes.length));
   await assert.rejects(linuxReleaseFiles(root, expected), /checksum/);
   await rm(files[2]);
   await assert.rejects(linuxReleaseFiles(root, expected), { code: 'ENOENT' });
-  await assert.rejects(
-    packageLinuxBundle({ root, bundle, ...expected, commit: 'b'.repeat(64), partBytes: 10 }),
-    /two release parts/,
-  );
 });
 
 test('Linux download links lead supported desktops to installation instructions', async () => {

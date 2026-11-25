@@ -1088,7 +1088,7 @@ async function draftAll({ stageOnly = false } = {}) {
     `https://github.com/${releaseRepository}/releases/download/${tag}/${file}`;
   if (verifiedFiles.length > 30)
     throw new Error('A desktop release must keep at most 30 assets for installed app updates.');
-  const details = `### Downloads\n\n- [Mac Intel](${download('nod-x64.dmg')})\n- [Mac ARM](${download('nod-arm64.dmg')})\n- [Windows](${download('nod-Setup-x64.exe')})\n- [Linux x64 Flatpak (preview)](https://nod.n8n.io/docs/get-started/install-desktop/#linux)\n\nMac requires macOS 14 or later. Windows requires Windows 11 with WSL 2. Linux needs Flatpak and a desktop secret store. A local Linux assistant also needs KVM. To install, follow the [install guide](https://nod.n8n.io/docs/get-started/install-desktop/). Mac, Windows and Linux apps download their runtime on first launch. Mac and Windows apps update themselves; Linux updates by installing the next bundle. Join all nod-linux-x64.flatpak.partNN files before installation, then check SHA256SUMS-linux-x64.\n\nMac builds use ${signingMode === 'self-signed' ? 'the internal signing certificate' : 'Developer ID signing and Apple notarization'}. Windows builds are signed by n8n GmbH. Linux bundle parts have checksums. Public releases include build provenance.\n\n${prepared.notes.trimEnd()}\n\n${marker}\n`;
+  const details = `### Downloads\n\n- [Mac Intel](${download('nod-x64.dmg')})\n- [Mac ARM](${download('nod-arm64.dmg')})\n- [Windows](${download('nod-Setup-x64.exe')})\n- [Linux x64 Flatpak (preview)](https://nod.n8n.io/docs/get-started/install-desktop/#linux)\n\nMac requires macOS 14 or later. Windows requires Windows 11 with WSL 2. Linux needs Flatpak and a desktop secret store. A local Linux assistant also needs KVM. To install, follow the [install guide](https://nod.n8n.io/docs/get-started/install-desktop/). Mac, Windows and Linux apps download their runtime on first launch. Mac and Windows apps update themselves; Linux updates by installing the next bundle. Check nod-linux-x64.flatpak against SHA256SUMS-linux-x64 before installation.\n\nMac builds use ${signingMode === 'self-signed' ? 'the internal signing certificate' : 'Developer ID signing and Apple notarization'}. Windows builds are signed by n8n GmbH. The Linux bundle has a checksum. Public releases include build provenance.\n\n${prepared.notes.trimEnd()}\n\n${marker}\n`;
   const notes = publicReleaseNotes(
     prepared,
     details,
@@ -1136,7 +1136,7 @@ async function draftAll({ stageOnly = false } = {}) {
     metadata.installer,
     metadata.runtime,
     linuxRuntime.archive,
-    ...linux.parts,
+    linux.bundle,
   ]);
   if (process.env.NOD_PUBLISH_RELEASE === 'true') {
     requireUpdateSourceVisibility(process.env.NOD_DESKTOP_UPDATE_SOURCE_URL);

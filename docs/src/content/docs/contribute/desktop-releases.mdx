@@ -27,16 +27,16 @@ flowchart TD
 
 Each release is named **Nod v0.x.x** and links these installers:
 
-| Platform          | Installer                      | Updates                 |
-| ----------------- | ------------------------------ | ----------------------- |
-| Mac Apple silicon | `nod-arm64.dmg`                | Automatic               |
-| Mac Intel         | `nod-x64.dmg`                  | Automatic               |
-| Windows x64       | `nod-Setup-x64.exe`            | Automatic               |
-| Linux x64 preview | `nod-linux-x64.flatpak.partNN` | Install the next bundle |
+| Platform          | Installer               | Updates                 |
+| ----------------- | ----------------------- | ----------------------- |
+| Mac Apple silicon | `nod-arm64.dmg`         | Automatic               |
+| Mac Intel         | `nod-x64.dmg`           | Automatic               |
+| Windows x64       | `nod-Setup-x64.exe`     | Automatic               |
+| Linux x64 preview | `nod-linux-x64.flatpak` | Install the next bundle |
 
 Mac ZIP files, Mac and Linux runtime packs, checksums, the public certificate, update metadata and the Terminal and PowerShell install scripts stay on the same release as supporting assets.
 
-The Linux Flatpak bundle does not include the runtime pack; local setup downloads `nod-Runtime-linux-x64-<id>.tar.gz` from the release, the same way as on a Mac. The Flatpak bundle build allows at most two parts, each at most 1900 MiB, to stay below GitHub's 2 GiB limit per file. `release-linux-x64.json` records the version, source commit, Flatpak commit, sizes, and hashes. `SHA256SUMS-linux-x64` covers every part and the joined bundle. Releases keep at most 30 assets so older installed apps can still read them. See [Linux installation](/get-started/install-desktop/#linux).
+The Linux Flatpak bundle does not include the runtime pack; local setup downloads `nod-Runtime-linux-x64-<id>.tar.gz` from the release, the same way as on a Mac. The bundle is one release file of at most 1900 MiB, below GitHub's 2 GiB limit per file. `release-linux-x64.json` records the version, source commit, Flatpak commit, size and hash. `SHA256SUMS-linux-x64` covers the bundle. Releases keep at most 30 assets so older installed apps can still read them. See [Linux installation](/get-started/install-desktop/#linux).
 
 Desktop builds include the server source, built web files, production dependencies, required runtime files, and licenses. The server runs TypeScript through `tsx`.
 
@@ -235,7 +235,7 @@ Each night, and when you start **CI** by hand on a branch, a Windows runner also
 
 The release build's Windows check also stops the WSL service to confirm that Nod reports the Windows error in readable text with the code that offers **Install WSL**, plants a half-installed WSL distribution to confirm that setup replaces it, and installs the private computer in a chosen folder.
 
-Pull requests that change Linux build inputs also run **Build Linux desktop**. It builds and installs the Flatpak preview, checks its engine and bundle parts, and uploads the files. **Build desktop release** packages all desktop apps and verifies their release assets before publication.
+Pull requests that change Linux build inputs also run **Build Linux desktop**. It builds and installs the Flatpak preview, checks its engine and bundle, and uploads the files. **Build desktop release** packages all desktop apps and verifies their release assets before publication.
 
 The required **Checks, tests and build** result waits for both Mac update checks. If either Mac check fails, that required result fails too.
 
@@ -258,7 +258,7 @@ The container images, Linux Flatpak, Windows runtime, Mac signing, Mac update ch
 
 Docker builds use Blacksmith's disk cache, with a separate cache for each Mac architecture, the Linux x64 runtime, and the Windows runtime. They do not export Docker layers to GitHub's cache service.
 
-Update checks run alongside the builds. App jobs can install dependencies and build the source while their runtimes are prepared. Each Mac job waits only for its own images. It then signs its runtime and app. The final job downloads platform artifacts in parallel. It checks all four platform bundles, then uploads their files together. It downloads the installers, Mac ZIPs, Windows runtime, and Linux bundle parts to check their bytes before publication.
+Update checks run alongside the builds. App jobs can install dependencies and build the source while their runtimes are prepared. Each Mac job waits only for its own images. It then signs its runtime and app. The final job downloads platform artifacts in parallel. It checks all four platform bundles, then uploads their files together. It downloads the installers, Mac ZIPs, Windows runtime, Linux bundle and Linux runtime pack to check their bytes before publication.
 
 Developer ID builds submit the signed app to Apple and attach its ticket before they create the disk image and update ZIP. The build then submits the signed disk image and attaches its ticket. It mounts the finished disk image, copies its app to a temporary folder, and checks the app's signature, attached ticket and Gatekeeper result. A failed check stops the release. Runtime host tools have a separate notarization check because the app downloads them separately. ZIP and disk image creation run in parallel.
 
@@ -359,7 +359,7 @@ flatpak run io.n8n.Nod
 
 The Flatpak gets KVM, network, display, audio, notification, tray and Secret Service access, and your home folder and external drives under `/media` and `/run/media` for Local files and downloads, as the Mac and Windows apps have. The VM lives in `~/.nod-desktop`, as on a Mac.
 
-Release builds export a `stable` Flatpak bundle with Flathub as its desktop runtime source. They install it, check the engine, and divide the bundle into release parts. Publication verifies the source, Flatpak commit, each part, and the joined bundle. Linux files use the same release provenance checks as the other platforms. Recovery requires the Linux build to pass and keeps its original files.
+Release builds export a `stable` Flatpak bundle with Flathub as its desktop runtime source. They install it and check the engine. Publication verifies the source, Flatpak commit and bundle checksum. Linux files use the same release provenance checks as the other platforms. Recovery requires the Linux build to pass and keeps its original files.
 
 Official Linux builds use the `release` environment on `main`. Like Mac and Windows builds, they include its `NOD_TRACES_TOKEN` for opt-in conversation traces and mark the build as a release. Pull request and manual preview builds use the separate `linux-preview` environment. Their build metadata keeps usage data in the development environment.
 

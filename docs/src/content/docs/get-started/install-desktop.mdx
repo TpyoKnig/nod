@@ -117,13 +117,12 @@ The Linux x64 app is a Flatpak preview. It needs a 64-bit Intel or AMD computer,
    flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
    ```
 
-2. Open [Nod releases](https://github.com/n8n-io/nod/releases). Select a release with Linux files. Download **every** `nod-linux-x64.flatpak.partNN` file and `SHA256SUMS-linux-x64` from that release into one empty folder. GitHub limits each release file to 2 GiB, so Nod divides the bundle into numbered parts.
+2. Open [Nod releases](https://github.com/n8n-io/nod/releases). Select a release with Linux files. Download `nod-linux-x64.flatpak` and `SHA256SUMS-linux-x64` from that release into one empty folder.
 
-3. In that folder, join the parts, check their contents, and install the bundle. The install command runs only if every checksum passes:
+3. In that folder, check the bundle and install it. The install command runs only if the checksum passes:
 
    ```sh title="Terminal"
-   cat nod-linux-x64.flatpak.part[0-9][0-9] > nod-linux-x64.flatpak &&
-     sha256sum --check SHA256SUMS-linux-x64 &&
+   sha256sum --check SHA256SUMS-linux-x64 &&
      flatpak install --user ./nod-linux-x64.flatpak
    ```
 

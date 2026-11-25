@@ -64,7 +64,7 @@ Secret scanning skips its generic keyword check in tests and fixtures. Known key
 | `evals/`                                | `pnpm --dir evals run check` and `pnpm --dir evals test`                                                                                      |
 | Docs site pages, configuration, or code | `pnpm --dir docs build`                                                                                                                       |
 
-For Linux release packaging, run **Build Linux desktop** in Actions. It builds the x64 runtime and Flatpak, installs the bundle, and checks the engine inside it. It also sends and releases sleep prevention requests through the installed sandbox to private D-Bus services. Removing either power-service permission must block its request. These checks do not suspend the runner. The workflow saves checked bundle parts as `desktop-linux-x64`. The desktop release workflow requires this build. Full KVM startup and desktop integration still need a Linux desktop check. See [Linux builds](/contribute/desktop-releases/#build-a-linux-flatpak).
+For Linux release packaging, run **Build Linux desktop** in Actions. It builds the x64 runtime and Flatpak, installs the bundle, and checks the engine inside it. It also sends and releases sleep prevention requests through the installed sandbox to private D-Bus services. Removing either power-service permission must block its request. These checks do not suspend the runner. The workflow saves the checked bundle as `desktop-linux-x64`. The desktop release workflow requires this build. Full KVM startup and desktop integration still need a Linux desktop check. See [Linux builds](/contribute/desktop-releases/#build-a-linux-flatpak).
 
 The [capability evals](/contribute/evals/) call live models, so they aren't part of these checks. They run nightly and on request.
 
@@ -274,7 +274,7 @@ Actionlint 1.7.12 [does not yet accept GitHub's `queue` key](https://github.com/
 
 Nod keeps no Git notes. Push and manual CI runs on `main` delete any `refs/notes/*` ref on GitHub, such as the AI authorship notes that [git-ai](https://usegitai.com) pushes after each `git push`. GitHub can't block notes refs, and git-ai skips Git hooks, so don't run tools that push notes in this repository.
 
-Pull requests that change Linux build inputs also run **Build Linux desktop**. It builds and installs the Linux x64 Flatpak preview, checks the engine and bundle parts, and uploads the files.
+Pull requests that change Linux build inputs also run **Build Linux desktop**. It builds and installs the Linux x64 Flatpak preview, checks the engine and the bundle, and uploads the files.
 
 **Build desktop release** packages all desktop apps before publication. It checks Mac updates, signature rejection and profile preservation on both Mac architectures. It also checks Windows workspace paths, installation, startup and updates, and requires the Linux build to pass. A failed check blocks publication. See [Desktop releases](/contribute/desktop-releases/).
 

@@ -147,7 +147,7 @@ jobs:
           '
       - name: Check power services through the installed Flatpak
         run: /usr/bin/python3 desktop/scripts/check-linux-power.py
-      - name: Split and verify release files
+      - name: Check the release files
         run: |
           NOD_FLATPAK_COMMIT="$(flatpak info --user --show-commit io.n8n.Nod)"
           export NOD_FLATPAK_COMMIT
@@ -159,7 +159,7 @@ jobs:
           path: |
             dist/desktop/linux-x64/release-linux-x64.json
             dist/desktop/linux-x64/SHA256SUMS-linux-x64
-            dist/desktop/linux-x64/nod-linux-x64.flatpak.part*
+            dist/desktop/linux-x64/nod-linux-x64.flatpak
           compression-level: 0
           retention-days: 3
           if-no-files-found: error
