@@ -31,12 +31,13 @@ export function resolveRuntimeDescriptor(root, argv) {
     (!argv[descriptorOption + 1] || argv[descriptorOption + 1].startsWith('--'))
   )
     throw new Error('Pass the path to runtime-release.json after --runtime-descriptor.');
-  const path = resolve(
-    root,
+  const path =
     descriptorOption < 0
-      ? join(root, '.local', 'desktop-runtime-release', 'runtime-release.json')
-      : argv[descriptorOption + 1],
-  );
+      ? join(
+          resolve(process.env.NOD_RUNTIME_RELEASE_DIR || join(root, '.local', 'desktop-runtime-release')),
+          'runtime-release.json',
+        )
+      : resolve(argv[descriptorOption + 1]);
   if (basename(path) !== 'runtime-release.json')
     throw new Error('The runtime descriptor must be named runtime-release.json.');
   return path;

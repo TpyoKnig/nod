@@ -274,7 +274,7 @@ async function requireDiskSpace(release, directory, inspectDisk, reused) {
   if (available < required)
     throw Object.assign(
       new Error(
-        `Nod needs ${(Math.ceil((Number(required) / 1024 ** 3) * 10) / 10).toFixed(1)} GiB of free space to install its runtime. Free at least ${(Math.ceil((Number(required - available) / 1024 ** 3) * 100) / 100).toFixed(2)} GiB on this Mac, then retry. Your saved conversations and settings are kept.`,
+        `Nod needs ${(Math.ceil((Number(required) / 1024 ** 3) * 10) / 10).toFixed(1)} GiB of free space to install its runtime. Free at least ${(Math.ceil((Number(required - available) / 1024 ** 3) * 100) / 100).toFixed(2)} GiB on this computer, then retry. Your saved conversations and settings are kept.`,
       ),
       { code: 'RUNTIME_DISK_SPACE' },
     );
@@ -284,7 +284,7 @@ function installationError(error) {
   if (!['ENOSPC', 'EDQUOT'].includes(error.code)) return error;
   return Object.assign(
     new Error(
-      'Nod ran out of disk space while installing its runtime. Free space on this Mac, then retry. Your saved conversations and settings are kept.',
+      'Nod ran out of disk space while installing its runtime. Free space on this computer, then retry. Your saved conversations and settings are kept.',
     ),
     { code: 'RUNTIME_DISK_SPACE' },
   );
