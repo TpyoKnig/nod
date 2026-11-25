@@ -960,7 +960,13 @@ async function draftAll({ stageOnly = false } = {}) {
   const linuxBaseUrl = `https://github.com/${runtimeRepository}/releases/download/${tag}`;
   const linuxInputs = JSON.parse(
     run(process.execPath, ['desktop/scripts/runtime-inputs.mjs'], {
-      env: { ...process.env, NOD_DESKTOP_TARGET: 'linux-x64' },
+      env: {
+        ...process.env,
+        NOD_DESKTOP_TARGET: 'linux-x64',
+        NOD_SIGNING_MODE: '',
+        NOD_SIGNING_IDENTITY: '',
+        NOD_SIGNING_CERTIFICATE_SHA256: '',
+      },
     }),
   );
   if (
