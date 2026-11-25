@@ -21,6 +21,7 @@ on:
       - '.github/workflows/linux-desktop.yml'
       - 'desktop/flatpak/**'
       - 'desktop/rpm/**'
+      - 'desktop/assets/**'
       - 'desktop/scripts/*linux*.mjs'
       - 'desktop/scripts/*linux*.py'
       - 'desktop/scripts/runtime-pack.mjs'

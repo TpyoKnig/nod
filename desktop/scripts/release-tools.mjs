@@ -39,7 +39,7 @@ export function resolveRuntimeDescriptor(root, argv) {
           ),
           'runtime-release.json',
         )
-      : resolve(argv[descriptorOption + 1]);
+      : resolve(root, argv[descriptorOption + 1]);
   if (basename(path) !== 'runtime-release.json')
     throw new Error('The runtime descriptor must be named runtime-release.json.');
   return path;
