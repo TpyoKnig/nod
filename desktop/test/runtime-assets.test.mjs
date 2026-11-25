@@ -1762,12 +1762,20 @@ test('all four checked bundles publish together as one regular Nod release', asy
       'manifest.json',
     ].map((path) => ({ path, bytes: 1, mode: 0o644, sha256: f.digest(path) }));
     const linuxRuntimeId = f.digest(JSON.stringify(linuxRuntimeFiles));
+    const linuxFingerprint = JSON.parse(
+      (
+        await promisify(execFile)(process.execPath, ['desktop/scripts/runtime-inputs.mjs'], {
+          cwd: f.root,
+          env: { ...process.env, NOD_DESKTOP_TARGET: 'linux-x64' },
+        })
+      ).stdout,
+    ).fingerprint;
     const linuxRuntimeArchiveName = `nod-Runtime-linux-x64-${linuxRuntimeId.slice(0, 12)}.tar.gz`;
     const linuxRuntime = {
       version: 1,
       platform: 'linux-x64',
       id: linuxRuntimeId,
-      fingerprint: f.digest('Synthetic Linux runtime inputs'),
+      fingerprint: linuxFingerprint,
       archive: {
         file: linuxRuntimeArchiveName,
         bytes: linuxRuntimeBytes.length,
