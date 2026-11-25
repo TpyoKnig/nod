@@ -34,7 +34,9 @@ export function resolveRuntimeDescriptor(root, argv) {
   const path =
     descriptorOption < 0
       ? join(
-          resolve(process.env.NOD_RUNTIME_RELEASE_DIR || join(root, '.local', 'desktop-runtime-release')),
+          resolve(
+            process.env.NOD_RUNTIME_RELEASE_DIR || join(root, '.local', 'desktop-runtime-release'),
+          ),
           'runtime-release.json',
         )
       : resolve(argv[descriptorOption + 1]);
