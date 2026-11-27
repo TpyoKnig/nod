@@ -38,5 +38,14 @@ export function createContainerBrowserComputer(options: {
         env: serviceEnvironment(),
         shell: false,
       }),
+    launchPersistent: () =>
+      launch(
+        'docker',
+        ['exec', '-i', '--user', 'node', container, 'node', '/app/bridge.mjs', '--multiplex'],
+        {
+          env: serviceEnvironment(),
+          shell: false,
+        },
+      ),
   });
 }
