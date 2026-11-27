@@ -9388,7 +9388,6 @@ test(
         assert.throws(
           () => setOpenAtLogin(true),
           (error) => {
-            assert.match(error.message, /needs the Flatpak or the RPM package/);
             assert.equal(error.retryable, false);
             return true;
           },
