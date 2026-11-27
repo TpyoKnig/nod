@@ -26,7 +26,7 @@ export async function publishLinuxRepo({ root, repo, key, gpgHome, version, sour
   const { stdout } = await run('ostree', [`--repo=${repo}`, 'rev-parse', ref]);
   if (stdout.trim() !== manifest.commit)
     throw new Error('The Linux repository does not hold the commit in the release manifest.');
-  await run('flatpak', ['build-sign', ...signing, repo, 'io.n8n.Nod', 'stable']);
+  await run('flatpak', ['build-sign', '--arch=x86_64', ...signing, repo, 'io.n8n.Nod', 'stable']);
   await run('flatpak', [
     'build-update-repo',
     ...signing,

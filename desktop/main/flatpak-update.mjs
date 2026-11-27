@@ -60,8 +60,9 @@ export async function connectFlatpakPortal() {
     },
     close() {
       handlers = {};
-      call(path, monitorInterface, 'Close', '', []).catch(() => {});
-      bus.close();
+      call(path, monitorInterface, 'Close', '', [])
+        .catch(() => {})
+        .finally(() => bus.close());
     },
   };
 }
@@ -81,14 +82,21 @@ export function createFlatpakUpdater({
   let checking;
   let restarting;
   let disposed = false;
-  const started = connect().then((connected) => {
-    portal = connected;
-    if (disposed) return connected.close();
-    connected.onAvailable((info) => {
-      available = info['remote-commit'];
+  let started;
+  let connected = false;
+  const beginConnect = () => {
+    connected = false;
+    started = connect().then((value) => {
+      portal = value;
+      connected = true;
+      if (disposed) return value.close();
+      value.onAvailable((info) => {
+        available = info['remote-commit'];
+      });
     });
-  });
-  started.catch(() => {});
+    started.catch(() => {});
+  };
+  beginConnect();
   return {
     get ready() {
       return ready;
@@ -99,27 +107,55 @@ export function createFlatpakUpdater({
       if (checking) return checking;
       checking = (async () => {
         onStatus('checking');
-        await started;
+        if (connected) await started;
+        else {
+          let connectTimer;
+          try {
+            await Promise.race([
+              started,
+              new Promise((_, reject) => {
+                connectTimer = setTimeout(
+                  () => reject(new Error('Nod could not reach the Flatpak portal. Try again.')),
+                  installTimeout,
+                );
+                connectTimer.unref?.();
+              }),
+            ]);
+          } finally {
+            clearTimeout(connectTimer);
+          }
+        }
         if (!available || available === ready?.commit) return ready;
         const candidate = await source.latest(currentVersion, controller.signal);
         if (candidate?.commit !== available) return ready;
         onStatus('downloading');
         let timer;
-        await Promise.race([
-          portal.update((progress) => onStatus('downloading', progress)),
-          new Promise((_, reject) => {
-            timer = setTimeout(
-              () =>
+        let timedOut = false;
+        try {
+          await Promise.race([
+            portal.update((progress) => onStatus('downloading', progress)),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => {
+                timedOut = true;
                 reject(
                   new Error(
                     'The update did not finish. If your desktop asked to allow Nod to update itself, answer it and try again.',
                   ),
-                ),
-              installTimeout,
-            );
-            timer.unref?.();
-          }),
-        ]).finally(() => clearTimeout(timer));
+                );
+              }, installTimeout);
+              timer.unref?.();
+            }),
+          ]);
+        } catch (installError) {
+          if (timedOut) {
+            const stale = portal;
+            beginConnect();
+            stale.close();
+          }
+          throw installError;
+        } finally {
+          clearTimeout(timer);
+        }
         controller.signal.throwIfAborted();
         ready = { ...candidate };
         return ready;

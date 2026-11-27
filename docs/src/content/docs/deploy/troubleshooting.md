@@ -71,7 +71,7 @@ The Flatpak uses `xdg-desktop-portal` for Trash. Check that your desktop's porta
 
 ### Linux does not find an app update
 
-On Linux, only a Flatpak installed from a Nod repository updates itself, and the portal checks about every 30 minutes. **Check for Updates…** cannot force an earlier check. If Nod shows that the portal refused an update, the release added permissions: install it with `flatpak install --user --reinstall io.n8n.Nod//stable`. A Flatpak installed from a bundle file has no repository, so download and install the next bundle with the [Linux install procedure](/get-started/install-desktop/#linux). `flatpak update` alone does not fetch a new Nod bundle. An RPM install never updates itself: Nod shows a notice, or a dialog with **Copy command**, that says to run `sudo dnf upgrade nod`. If that finds nothing, the Nod package repository is not set up in `dnf`.
+On Linux, only a Flatpak installed from a Nod repository updates itself, and the portal checks about every 30 minutes. **Check for Updates…** cannot force an earlier check. If Nod shows that the portal refused an update, the release added permissions: install it with `flatpak install --user --reinstall io.n8n.Nod//stable`. A Flatpak installed from a bundle file has no repository, so download and install the next bundle with the [Linux install procedure](/get-started/install-desktop/#linux). `flatpak update` alone does not fetch a new Nod bundle. An RPM install never updates itself: Nod shows a notice, or a dialog with **Copy command**, that says to run `sudo dnf upgrade nod`. If that finds nothing, check that the Nod package repository is set up in `dnf`, that it is reachable, and that a newer version is actually published there.
 
 ### macOS blocks the first launch
 
