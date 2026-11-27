@@ -16,6 +16,7 @@ export function DesktopPreferencesSetup({
   steps: readonly OnboardingStep[];
 }) {
   const [error, setError] = useState('');
+  const [loginItemNotice, setLoginItemNotice] = useState('');
   const [retry, setRetry] = useState(0);
   const ready = useRef(onReady);
   ready.current = onReady;
@@ -28,7 +29,8 @@ export function DesktopPreferencesSetup({
         if (!current) return;
         if (value.preferenceStep !== 'complete')
           throw new Error('Nod couldn’t finish setup. Try again.');
-        ready.current();
+        if (value.loginItemError) setLoginItemNotice(value.loginItemError);
+        else ready.current();
       })
       .catch((cause) => {
         if (current) setError(errorMessage(cause));
@@ -41,7 +43,7 @@ export function DesktopPreferencesSetup({
   return (
     <OnboardingFrame step="join" steps={steps}>
       <section className="ob-step">
-        <Messages items={[]} typing={!error} />
+        <Messages items={[]} typing={!error && !loginItemNotice} />
         {error && (
           <Notice>
             {error}{' '}
@@ -53,6 +55,14 @@ export function DesktopPreferencesSetup({
               }}
             >
               Try again
+            </Button>
+          </Notice>
+        )}
+        {loginItemNotice && (
+          <Notice kind="info">
+            {loginItemNotice} You can turn it on later in Settings.{' '}
+            <Button variant="ghost" onClick={() => ready.current()}>
+              Continue
             </Button>
           </Notice>
         )}

@@ -21,6 +21,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 import { createServer as createHttpsServer } from 'node:https';
@@ -1064,6 +1065,7 @@ async function runningDesktop(
       saveEngineDownload,
       setReady: (ready) => { status.phase = ready ? 'ready' : 'starting'; },
       status: () => status,
+      loginItemState,
       notifyReady: updateReadinessNotice,
       checkUpdates: (updater, manual = true, restartReady = false) => { updates = updater; return checkForUpdates(manual, restartReady); },
       detectInstaller: async () => { const restart = await openedDuringUpdateRestart(); refreshUpdateMenu(); return restart; },
@@ -8990,7 +8992,12 @@ test('desktop preference steps and completion require the owned normal app and d
         await assert.rejects(save(event, { launchAtLogin: true }), /login items/);
         assert.equal((await f.storage.reopen().get()).launchAtLogin, false);
         assert.equal((await f.storage.reopen().get()).onboardingPreferenceStep, 'launchAtLogin');
-        await save(event, { launchAtLogin: true, onboardingPreferenceStep: 'complete' });
+        const onboardingFailure = await save(event, {
+          launchAtLogin: true,
+          onboardingPreferenceStep: 'complete',
+        });
+        assert.match(onboardingFailure.loginItemError, /login items/);
+        assert.equal(f.loginItemState(), 'failed');
         assert.equal((await f.storage.reopen().get()).launchAtLogin, false);
         assert.equal((await f.storage.reopen().get()).onboardingPreferenceStep, 'complete');
         loginItemsWritable = true;
@@ -9001,12 +9008,18 @@ test('desktop preference steps and completion require the owned normal app and d
           await assert.rejects(save(event, { launchAtLogin: true }), /login items/);
           assert.equal(registered, true);
           assert.equal((await f.storage.reopen().get()).launchAtLogin, false);
-          await save(event, { launchAtLogin: true, onboardingPreferenceStep: 'complete' });
+          const statusFailure = await save(event, {
+            launchAtLogin: true,
+            onboardingPreferenceStep: 'complete',
+          });
+          assert.match(statusFailure.loginItemError, /login items/);
+          assert.equal(f.loginItemState(), 'failed');
           assert.equal((await f.storage.reopen().get()).onboardingPreferenceStep, 'complete');
         }
         loginStatus = {};
         await save(event, { launchAtLogin: false });
         assert.equal(registered, false);
+        assert.equal(f.loginItemState(), 'not_registered');
         const originalSave = f.storage.store.save.bind(f.storage.store);
         f.storage.store.save = async () => {
           throw new Error('Synthetic settings storage failed.');
@@ -9037,6 +9050,146 @@ test('desktop preference steps and completion require the owned normal app and d
       }
     });
 });
+
+test(
+  'Linux login item autostart entry tracks the real file, tolerates cosmetic differences and self-heals when stale',
+  { skip: process.platform !== 'linux' },
+  async (t) => {
+    const source = (await readFile(new URL('../main/login-item.mjs', import.meta.url), 'utf8'))
+      .replace(/^import[\s\S]*?;\n/gm, '')
+      .replaceAll('export function', 'function');
+    async function loadLoginItem(t, env = {}) {
+      const root = await mkdtemp(join(tmpdir(), 'nod-login-item-'));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const configHome = join(root, '.config');
+      const resolvedEnv = env.FLATPAK_ID
+        ? { HOST_XDG_CONFIG_HOME: configHome, ...env }
+        : { XDG_CONFIG_HOME: configHome, ...env };
+      const context = {
+        process: { platform: 'linux', pid: process.pid, env: resolvedEnv },
+        app: {},
+        homedir: () => root,
+        dirname,
+        join,
+        mkdirSync,
+        readFileSync,
+        renameSync,
+        rmSync,
+        writeFileSync,
+      };
+      runInNewContext(
+        `${source}\nglobalThis.loginItem = { opensAtLogin, setOpenAtLogin, repairStaleAutostart };`,
+        context,
+      );
+      return {
+        ...context.loginItem,
+        entryPath: join(configHome, 'autostart', 'io.n8n.Nod.desktop'),
+      };
+    }
+
+    await t.test(
+      'a plain Linux build cannot enable it, and absence always means off',
+      async (t) => {
+        const { opensAtLogin, setOpenAtLogin, repairStaleAutostart, entryPath } =
+          await loadLoginItem(t);
+        assert.equal(opensAtLogin(), false);
+        assert.throws(() => setOpenAtLogin(true), /needs the Flatpak or the RPM package/);
+        assert.equal(opensAtLogin(), false);
+        assert.equal(repairStaleAutostart(), false);
+        await assert.rejects(readFile(entryPath));
+      },
+    );
+
+    await t.test('the RPM package writes, reports and removes the entry atomically', async (t) => {
+      const { opensAtLogin, setOpenAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(
+        t,
+        { NOD_PACKAGE: 'rpm' },
+      );
+      setOpenAtLogin(true);
+      assert.equal(opensAtLogin(), true);
+      assert.equal(repairStaleAutostart(), false);
+      assert.deepEqual(await readdir(dirname(entryPath)), ['io.n8n.Nod.desktop']);
+      assert.equal(
+        await readFile(entryPath, 'utf8'),
+        '[Desktop Entry]\nType=Application\nName=Nod\nExec=nod\n',
+      );
+      setOpenAtLogin(false);
+      assert.equal(opensAtLogin(), false);
+      await assert.rejects(readFile(entryPath));
+    });
+
+    await t.test(
+      'an entry removed by another tool after enabling is never recreated',
+      async (t) => {
+        const { opensAtLogin, setOpenAtLogin, repairStaleAutostart, entryPath } =
+          await loadLoginItem(t, { NOD_PACKAGE: 'rpm' });
+        setOpenAtLogin(true);
+        await rm(entryPath);
+        assert.equal(opensAtLogin(), false);
+        assert.equal(repairStaleAutostart(), false);
+        await assert.rejects(readFile(entryPath));
+      },
+    );
+
+    await t.test(
+      'cosmetic differences from another tool are accepted without a rewrite',
+      async (t) => {
+        const { opensAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(t, {
+          NOD_PACKAGE: 'rpm',
+        });
+        await mkdir(dirname(entryPath), { recursive: true });
+        const cosmetic =
+          '[Desktop Entry]\n# Added by a desktop environment\nType=Application\nName=Nod\nExec=nod\nX-GNOME-Autostart-enabled=true\n';
+        await writeFile(entryPath, cosmetic);
+        assert.equal(opensAtLogin(), true);
+        assert.equal(repairStaleAutostart(), false);
+        assert.equal(await readFile(entryPath, 'utf8'), cosmetic);
+      },
+    );
+
+    await t.test('a stale entry from an older install is rewritten on repair, once', async (t) => {
+      const { opensAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(t, {
+        NOD_PACKAGE: 'rpm',
+      });
+      await mkdir(dirname(entryPath), { recursive: true });
+      await writeFile(
+        entryPath,
+        '[Desktop Entry]\nType=Application\nName=Nod\nExec=/opt/old-nod/nod\n',
+      );
+      assert.equal(opensAtLogin(), true);
+      assert.equal(repairStaleAutostart(), true);
+      assert.equal(
+        await readFile(entryPath, 'utf8'),
+        '[Desktop Entry]\nType=Application\nName=Nod\nExec=nod\n',
+      );
+      assert.equal(repairStaleAutostart(), false);
+      assert.deepEqual(await readdir(dirname(entryPath)), ['io.n8n.Nod.desktop']);
+    });
+
+    await t.test('Flatpak writes to the host config path with its own essential key', async (t) => {
+      const { opensAtLogin, setOpenAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(
+        t,
+        { FLATPAK_ID: 'io.n8n.Nod' },
+      );
+      setOpenAtLogin(true);
+      assert.equal(opensAtLogin(), true);
+      assert.equal(
+        await readFile(entryPath, 'utf8'),
+        '[Desktop Entry]\nType=Application\nName=Nod\nExec=flatpak run io.n8n.Nod\nX-Flatpak=io.n8n.Nod\n',
+      );
+      await writeFile(
+        entryPath,
+        '[Desktop Entry]\nType=Application\nName=Nod\nExec=flatpak run io.n8n.Nod\n',
+      );
+      assert.equal(opensAtLogin(), true);
+      assert.equal(repairStaleAutostart(), true);
+      assert.equal(
+        await readFile(entryPath, 'utf8'),
+        '[Desktop Entry]\nType=Application\nName=Nod\nExec=flatpak run io.n8n.Nod\nX-Flatpak=io.n8n.Nod\n',
+      );
+    });
+  },
+);
 
 test('native readiness notification waits for full runtime readiness and reaches opted-in background users once', async (t) => {
   for (const scenario of [
