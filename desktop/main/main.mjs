@@ -3715,7 +3715,9 @@ else {
         if (saved.launchAtLogin) {
           try {
             repairStaleAutostart();
-          } catch {}
+          } catch (error) {
+            void writeDiagnostic(error.message).catch(() => {});
+          }
         }
         await resumeState();
         const removeData = Menu.getApplicationMenu?.()?.getMenuItemById('remove-local-data');
