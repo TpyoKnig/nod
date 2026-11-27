@@ -7336,6 +7336,20 @@ test('Flatpak updates install only the commit the public release describes and r
   await assert.rejects(updater.restart(), /No desktop update is ready/);
 });
 
+test('disposing a Flatpak updater rejects a stalled connection attempt instead of waiting out the install timeout', async () => {
+  const updater = createFlatpakUpdater({
+    connect: () => new Promise(() => {}),
+    source: { latest: async () => assert.fail('No source request is needed.') },
+    currentVersion: '0.5.0',
+    restart: async () => {},
+    installTimeout: 30 * 60 * 1000,
+  });
+  const checking = updater.check();
+  await new Promise(setImmediate);
+  await updater.dispose();
+  await assert.rejects(checking, /Nod is closing/);
+});
+
 test('a Flatpak install that waits on an unanswered desktop prompt stops after its timeout and can be retried', async () => {
   const commit = 'c'.repeat(64);
   let answered = false;

@@ -141,7 +141,8 @@ export function createSettingsStore(path, encryption, platform = process.platfor
         (value.onboardingPreferenceStep !== undefined &&
           !onboardingPreferenceSteps.includes(value.onboardingPreferenceStep)) ||
         (value.announcedPackageVersion !== undefined &&
-          !versionPattern.test(value.announcedPackageVersion)) ||
+          (typeof value.announcedPackageVersion !== 'string' ||
+            !versionPattern.test(value.announcedPackageVersion))) ||
         (value.serverUrl !== undefined &&
           (serverOrigin(value.serverUrl) !== value.serverUrl || !value.secrets.serverToken)) ||
         (value.welcome !== undefined &&

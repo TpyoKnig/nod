@@ -6,10 +6,18 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { linuxReleaseFiles } from './linux-release.mjs';
 
-const run = promisify(execFile);
+const defaultRun = promisify(execFile);
 const ref = 'app/io.n8n.Nod/x86_64/stable';
 
-export async function publishLinuxRepo({ root, repo, key, gpgHome, version, source }) {
+export async function publishLinuxRepo({
+  root,
+  repo,
+  key,
+  gpgHome,
+  version,
+  source,
+  run = defaultRun,
+}) {
   if (!key)
     throw new Error('Set NOD_FLATPAK_REPO_KEY to the GPG key that signs the Linux repository.');
   const [manifestPath, , bundle] = await linuxReleaseFiles(root, { version, source });
@@ -34,6 +42,7 @@ export async function publishLinuxRepo({ root, repo, key, gpgHome, version, sour
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
+  await run('flatpak', ['build-sign', '--arch=x86_64', ...signing, repo, 'io.n8n.Nod', 'stable']);
   await run('flatpak', [
     'build-update-repo',
     ...signing,

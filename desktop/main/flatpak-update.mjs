@@ -26,7 +26,12 @@ export async function connectFlatpakPortal() {
   let pendingReject;
   const bus = await connectSessionBus({
     onSignal: (message) => {
-      if (message.path !== path || message.type !== signalType) return;
+      if (message.type !== signalType) return;
+      if (path === undefined) {
+        if (message.member === 'UpdateAvailable') bufferedAvailable = message.values[0] ?? {};
+        return;
+      }
+      if (message.path !== path) return;
       const handler = handlers[message.member];
       if (handler) handler(message.values[0] ?? {});
       else if (message.member === 'UpdateAvailable') bufferedAvailable = message.values[0] ?? {};
@@ -65,7 +70,9 @@ export async function connectFlatpakPortal() {
           if (info.status === status.running) return onProgress(info.progress / 100);
           handlers.Progress = undefined;
           pendingReject = undefined;
-          if (info.status === status.empty || info.status === status.done) resolve();
+          if (info.status === status.done) resolve();
+          else if (info.status === status.empty)
+            reject(new Error('The Flatpak portal found nothing to install. Try again.'));
           else reject(refused(new Error(info.error_message || 'The Flatpak update failed.')));
         };
         call(path, monitorInterface, 'Update', 'sa{sv}', ['', {}]).catch((error) => {
@@ -132,6 +139,7 @@ export function createFlatpakUpdater({
         if (connected) await started;
         else {
           let connectTimer;
+          let onAbort;
           try {
             await Promise.race([
               started,
@@ -142,12 +150,18 @@ export function createFlatpakUpdater({
                 );
                 connectTimer.unref?.();
               }),
+              new Promise((_, reject) => {
+                if (controller.signal.aborted) return reject(new Error('Nod is closing.'));
+                onAbort = () => reject(new Error('Nod is closing.'));
+                controller.signal.addEventListener('abort', onAbort, { once: true });
+              }),
             ]);
           } catch (connectError) {
             if (!connected && !disposed) beginConnect();
             throw connectError;
           } finally {
             clearTimeout(connectTimer);
+            if (onAbort) controller.signal.removeEventListener('abort', onAbort);
           }
         }
         if (!available || available === ready?.commit) return ready;
