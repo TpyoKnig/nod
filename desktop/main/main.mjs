@@ -191,6 +191,7 @@ const secondsSinceBootAtLaunch = uptime();
 const claimedAppOpens = new Set();
 const appUIOpenings = new Map();
 let lastLoginItemAttemptFailed = false;
+let lastLoginItemFailureMessage;
 function realLaunchAtLogin(saved) {
   try {
     return opensAtLogin();
@@ -2071,6 +2072,7 @@ async function saveRendererSettings(event, value) {
           'Open at login could not be updated. Check Nod in your computer’s login items, then try again.',
         );
       lastLoginItemAttemptFailed = false;
+      lastLoginItemFailureMessage = undefined;
     } catch (error) {
       if (value.onboardingPreferenceStep !== 'complete' || value.launchAtLogin !== true)
         throw error;
@@ -2079,6 +2081,7 @@ async function saveRendererSettings(event, value) {
         error.retryable === false
           ? error.message
           : `${error.message} You can turn it on later in Settings.`;
+      lastLoginItemFailureMessage = loginItemFailureMessage;
       if (typeof previousLogin === 'boolean') {
         try {
           setOpenAtLogin(previousLogin);
@@ -3600,7 +3603,13 @@ else {
       });
       ipcMain.handle('nod:setup:get', async (event) => {
         if (!isEngine(event) || remoteConnection) throw new Error('Local setup is unavailable.');
-        return { preferenceStep: (await settings.get()).onboardingPreferenceStep };
+        const preferenceStep = (await settings.get()).onboardingPreferenceStep;
+        return {
+          preferenceStep,
+          ...(preferenceStep === 'complete' && lastLoginItemAttemptFailed
+            ? { loginItemError: lastLoginItemFailureMessage }
+            : {}),
+        };
       });
       ipcMain.handle('nod:setup:preferences', async (event) => {
         if (!isEngine(event) || remoteConnection) throw new Error('Local setup is unavailable.');

@@ -8972,6 +8972,7 @@ test('desktop preference steps and completion require the owned normal app and d
         const window = f.windows.at(-1);
         const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
         const save = f.handlers.get('nod:settings:save');
+        const setupGet = f.handlers.get('nod:setup:get');
         await assert.rejects(
           save(
             { ...event, senderFrame: { url: window.url } },
@@ -8998,6 +8999,9 @@ test('desktop preference steps and completion require the owned normal app and d
         });
         assert.match(onboardingFailure.loginItemError, /login items/);
         assert.equal(f.loginItemState(), 'failed');
+        const reloaded = await setupGet(event);
+        assert.equal(reloaded.preferenceStep, 'complete');
+        assert.match(reloaded.loginItemError, /login items/);
         assert.equal((await f.storage.reopen().get()).launchAtLogin, false);
         assert.equal((await f.storage.reopen().get()).onboardingPreferenceStep, 'complete');
         loginItemsWritable = true;
@@ -9033,6 +9037,7 @@ test('desktop preference steps and completion require the owned normal app and d
         f.storage.store.save = originalSave;
         await save(event, { launchAtLogin: true, onboardingPreferenceStep: 'complete' });
         await save(event, { launchAtLogin: true, onboardingPreferenceStep: 'complete' });
+        assert.equal((await setupGet(event)).loginItemError, undefined);
         assert.equal((await f.storage.reopen().get()).onboardingPreferenceStep, 'complete');
         assert.equal((await f.storage.reopen().get()).notifications, false);
         await assert.rejects(save(event, { onboardingCompleted: true }));
