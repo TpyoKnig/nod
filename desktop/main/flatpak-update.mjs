@@ -150,13 +150,11 @@ export function createFlatpakUpdater({
         if (candidate?.commit !== available) return ready;
         onStatus('downloading');
         let timer;
-        let timedOut = false;
         try {
           await Promise.race([
             portal.update((progress) => onStatus('downloading', progress)),
             new Promise((_, reject) => {
               timer = setTimeout(() => {
-                timedOut = true;
                 reject(
                   new Error(
                     'The update did not finish. If your desktop asked to allow Nod to update itself, answer it and try again.',
@@ -167,11 +165,9 @@ export function createFlatpakUpdater({
             }),
           ]);
         } catch (installError) {
-          if (timedOut) {
-            const stale = portal;
-            beginConnect();
-            stale.close();
-          }
+          const stale = portal;
+          beginConnect();
+          stale.close();
           throw installError;
         } finally {
           clearTimeout(timer);
