@@ -14,7 +14,10 @@ async function digest(path) {
 }
 
 export async function writeRpmManifest({ directory, version, source }) {
-  if (!/^\d+\.\d+\.\d+$/.test(version || '') || !/^[a-f0-9]{40}$/.test(source || ''))
+  if (
+    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version || '') ||
+    !/^[a-f0-9]{40}$/.test(source || '')
+  )
     throw new Error('The RPM release needs a plain version and a 40-character source commit.');
   const path = join(directory, packageName);
   const { size } = await stat(path);

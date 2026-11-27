@@ -23,11 +23,17 @@ export async function publishLinuxRepo({ root, repo, key, gpgHome, version, sour
   )
     await run('ostree', [`--repo=${repo}`, 'init', '--mode=archive-z2']);
   await run('flatpak', ['build-import-bundle', repo, bundle]);
-  await run('flatpak', ['build-sign', ...signing, repo, 'io.n8n.Nod', 'stable']);
-  await run('flatpak', ['build-update-repo', ...signing, '--generate-static-deltas', repo]);
   const { stdout } = await run('ostree', [`--repo=${repo}`, 'rev-parse', ref]);
   if (stdout.trim() !== manifest.commit)
     throw new Error('The Linux repository does not hold the commit in the release manifest.');
+  await run('flatpak', ['build-sign', ...signing, repo, 'io.n8n.Nod', 'stable']);
+  await run('flatpak', [
+    'build-update-repo',
+    ...signing,
+    '--generate-static-deltas',
+    '--prune',
+    repo,
+  ]);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -277,11 +277,16 @@ export function connectSessionBus({ onSignal }) {
     try {
       parsed = parseMessages(received);
     } catch (reason) {
+      socket.destroy();
       return fail(reason);
     }
     received = parsed.rest;
     for (const message of parsed.messages) {
-      if (message.type === signalType) onSignal(message);
+      if (message.type === signalType) {
+        try {
+          onSignal(message);
+        } catch {}
+      }
       const request = pending.get(message.replySerial);
       if (!request || ![methodReturn, error].includes(message.type)) continue;
       pending.delete(message.replySerial);

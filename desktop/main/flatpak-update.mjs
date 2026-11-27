@@ -6,7 +6,7 @@ const signalType = 4;
 const status = { running: 0, empty: 1, done: 2 };
 
 function refused(error) {
-  return /not allowed/i.test(error.message)
+  return /not\s*allowed/i.test(error.message)
     ? new Error(
         'Your desktop does not let Nod update itself. Allow it in your privacy settings, or run flatpak permission-reset io.n8n.Nod and try again.',
         { cause: error },
