@@ -2525,16 +2525,12 @@ async function announcePackageUpdate(candidate) {
 }
 
 async function notifyUpdate(candidate) {
-  if (
-    !preferences.notifications ||
-    !Notification.isSupported() ||
-    quitting ||
-    focusedEngineWindow()
-  )
+  const { notifications } = await settings.get();
+  if (!notifications || !Notification.isSupported() || quitting || focusedEngineWindow())
     return false;
   if (
     isQuietTime((await appPreferences.get()).preferences) ||
-    !preferences.notifications ||
+    !notifications ||
     quitting ||
     focusedEngineWindow()
   )
@@ -2550,7 +2546,7 @@ async function notifyUpdate(candidate) {
   notification.on('show', () => {
     if (
       !displayedNotifications.has(notification) ||
-      !preferences.notifications ||
+      !notifications ||
       quitting ||
       focusedEngineWindow()
     )

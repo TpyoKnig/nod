@@ -7388,6 +7388,24 @@ test('RPM updates read their own release manifest and carry no commit', async ()
   await assert.rejects(rpm.latest('0.5.0'), /metadata is incompatible/);
 });
 
+test('the first automatic update check still notifies when saved notification preferences have not been applied in memory yet', async (t) => {
+  const profile = await fixture(t);
+  await profile.store.save({ notifications: true });
+  const updater = createNoticeUpdater({
+    source: { latest: async () => ({ version: '0.5.2', source: 'a'.repeat(40) }) },
+    currentVersion: '0.5.0',
+    command: 'sudo dnf upgrade nod',
+  });
+  t.after(() => updater.dispose());
+  const f = await runningDesktop(t, () => assert.fail('No engine request is needed.'), {
+    notificationsSupported: true,
+    storedProfile: profile,
+  });
+  await f.checkUpdates(updater, false);
+  assert.equal(f.notifications.length, 1);
+  assert.equal(await f.storage.store.announcedPackageVersion(), '0.5.2');
+});
+
 test('an RPM install announces a newer release once across restarts, shows the package command, and never offers a restart', async (t) => {
   const updater = createNoticeUpdater({
     source: { latest: async () => ({ version: '0.5.2', source: 'a'.repeat(40) }) },
