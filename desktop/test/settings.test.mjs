@@ -7388,7 +7388,7 @@ test('RPM updates read their own release manifest and carry no commit', async ()
   await assert.rejects(rpm.latest('0.5.0'), /metadata is incompatible/);
 });
 
-test('an RPM install announces a newer release once, shows the package command, and never offers a restart', async (t) => {
+test('an RPM install announces a newer release once across restarts, shows the package command, and never offers a restart', async (t) => {
   const updater = createNoticeUpdater({
     source: { latest: async () => ({ version: '0.5.2', source: 'a'.repeat(40) }) },
     currentVersion: '0.5.0',
@@ -7422,6 +7422,34 @@ test('an RPM install announces a newer release once, shows the package command, 
   assert.deepEqual(f.clipboardText, ['sudo dnf upgrade nod']);
   assert.equal(updater.ready, undefined);
   assert.equal(f.restartMenu.enabled, false);
+  const restarted = await runningDesktop(t, () => assert.fail('No engine request is needed.'), {
+    notificationsSupported: true,
+    storedProfile: f.storage,
+  });
+  await restarted.showSettings();
+  const restartedWindow = restarted.windows.at(-1);
+  await restarted.handlers.get('nod:settings:save')(
+    { sender: restartedWindow.webContents, senderFrame: restartedWindow.webContents.mainFrame },
+    { notifications: true },
+  );
+  restartedWindow.minimize();
+  const restartedBefore = restarted.notifications.length;
+  const sameVersion = createNoticeUpdater({
+    source: { latest: async () => ({ version: '0.5.2', source: 'a'.repeat(40) }) },
+    currentVersion: '0.5.0',
+    command: 'sudo dnf upgrade nod',
+  });
+  t.after(() => sameVersion.dispose());
+  await restarted.checkUpdates(sameVersion, false);
+  assert.equal(restarted.notifications.length, restartedBefore);
+  const newerVersion = createNoticeUpdater({
+    source: { latest: async () => ({ version: '0.5.3', source: 'a'.repeat(40) }) },
+    currentVersion: '0.5.0',
+    command: 'sudo dnf upgrade nod',
+  });
+  t.after(() => newerVersion.dispose());
+  await restarted.checkUpdates(newerVersion, false);
+  assert.equal(restarted.notifications.length, restartedBefore + 1);
 });
 
 test(

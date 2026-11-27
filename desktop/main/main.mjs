@@ -242,7 +242,6 @@ let updateSource;
 let updates;
 let checkingUpdates;
 let updateRequestedManually = false;
-let announcedPackageVersion;
 let updateRestartRequested = false;
 let updateRestartConfirmed = false;
 let updatePhase = 'idle';
@@ -2520,8 +2519,8 @@ async function announcePackageUpdate(candidate) {
     if (response === 0) clipboard.writeText(candidate.command);
     return;
   }
-  if (candidate.version === announcedPackageVersion) return;
-  if (await notifyUpdate(candidate)) announcedPackageVersion = candidate.version;
+  if (candidate.version === (await settings.announcedPackageVersion())) return;
+  if (await notifyUpdate(candidate)) await settings.saveAnnouncedPackageVersion(candidate.version);
 }
 
 async function notifyUpdate(candidate) {
