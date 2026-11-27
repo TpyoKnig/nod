@@ -10,7 +10,11 @@ export type DesktopPreferences = {
 
 export type DesktopSettings = DesktopPreferences;
 
-type LocalSetup = { preferenceStep: 'launchAtLogin' | 'complete'; loginItemError?: string };
+type LocalSetup = {
+  preferenceStep: 'launchAtLogin' | 'complete';
+  launchAtLogin?: boolean;
+  loginItemError?: string;
+};
 
 type LocalRuntime = {
   status(): Promise<DesktopStatus>;
@@ -177,6 +181,7 @@ export function clientPlatform(): ClientPlatform {
           throw new Error('Nod could not finish device setup. Try again.');
         return {
           preferenceStep: 'complete',
+          launchAtLogin: saved.launchAtLogin,
           ...(saved.loginItemError ? { loginItemError: saved.loginItemError } : {}),
         };
       },
