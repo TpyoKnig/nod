@@ -1366,7 +1366,14 @@ test('native local setup observes early runtime failure and recovery without pri
               code: 'NOD_COMPUTER_REGISTRATION_MISSING',
             }),
           }),
-          { code: privateText, step: 'wsl', exitCode: 125, statusCode: 503, signal: 'SIGKILL' },
+          {
+            code: privateText,
+            step: 'wsl',
+            exitCode: 125,
+            statusCode: 503,
+            signal: 'SIGKILL',
+            syscall: 'open',
+          },
         );
       onStatus({ stage: privateText, message: privateText, progress: 0.2 });
       const runtime = { env: {} };
@@ -1403,6 +1410,7 @@ test('native local setup observes early runtime failure and recovery without pri
     assert.equal(observations()[0].properties.failure_exit_code, 125);
     assert.equal(observations()[0].properties.failure_http_status, 503);
     assert.equal(observations()[0].properties.failure_signal, 'SIGKILL');
+    assert.equal(observations()[0].properties.failure_syscall, 'open');
     await f.handlers.get('nod:prepare')(event, { retry: true });
     assert.equal(f.status().engineReady, true, JSON.stringify(f.status()));
     await waitFor(() => assert.ok(observations().some((item) => item.properties.setup_available)), {
@@ -1456,6 +1464,7 @@ test('native local setup observes early runtime failure and recovery without pri
                 'failure_http_status',
                 'failure_signal',
                 'failure_step',
+                'failure_syscall',
               ]
             : item.properties.startup_status === 'failed'
               ? ['failure_exit_code']
