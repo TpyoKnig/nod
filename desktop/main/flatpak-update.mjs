@@ -98,9 +98,12 @@ export function createFlatpakUpdater({
   let disposed = false;
   let started;
   let connected = false;
+  let generation = 0;
   const beginConnect = () => {
     connected = false;
+    const current = ++generation;
     started = connect().then((value) => {
+      if (current !== generation) return value.close();
       portal = value;
       connected = true;
       if (disposed) return value.close();

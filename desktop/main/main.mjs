@@ -2704,11 +2704,16 @@ async function installUpdate({ relaunch = true } = {}) {
   }
   if (process.platform === 'linux') {
     await updateEvent('install-started', { method: 'flatpak', version });
-    installingUpdate = true;
-    spawn('flatpak-spawn', ['--latest-version', '--directory=/', 'nod'], {
+    const child = spawn('flatpak-spawn', ['--latest-version', '--directory=/', 'nod'], {
       detached: true,
       stdio: 'ignore',
-    }).unref();
+    });
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+    child.unref();
+    installingUpdate = true;
     app.exit();
     return;
   }
