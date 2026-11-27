@@ -21,11 +21,15 @@ const essentialAutostartKeys = () => (flatpak() ? ['Type', 'Exec', 'X-Flatpak'] 
 
 function parseDesktopEntry(text) {
   const fields = {};
+  let inMainEntry = false;
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
-    const separator = trimmed.indexOf('=');
-    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('[') || separator === -1)
+    if (trimmed.startsWith('[')) {
+      inMainEntry = trimmed === '[Desktop Entry]';
       continue;
+    }
+    const separator = trimmed.indexOf('=');
+    if (!inMainEntry || !trimmed || trimmed.startsWith('#') || separator === -1) continue;
     fields[trimmed.slice(0, separator).trim()] = trimmed.slice(separator + 1).trim();
   }
   return fields;

@@ -9179,6 +9179,22 @@ test(
       },
     );
 
+    await t.test(
+      'a Desktop Action section is ignored, so its Exec never counts as the main entry',
+      async (t) => {
+        const { opensAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(t, {
+          NOD_PACKAGE: 'rpm',
+        });
+        await mkdir(dirname(entryPath), { recursive: true });
+        const withAction =
+          '[Desktop Entry]\nType=Application\nName=Nod\nExec=nod\nActions=open;\n\n[Desktop Action open]\nName=Open Nod\nExec=nod --open\n';
+        await writeFile(entryPath, withAction);
+        assert.equal(opensAtLogin(), true);
+        assert.equal(repairStaleAutostart(), false);
+        assert.equal(await readFile(entryPath, 'utf8'), withAction);
+      },
+    );
+
     await t.test('a stale entry from an older install is rewritten on repair, once', async (t) => {
       const { opensAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(t, {
         NOD_PACKAGE: 'rpm',

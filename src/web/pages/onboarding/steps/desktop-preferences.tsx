@@ -59,7 +59,7 @@ export function DesktopPreferencesSetup({
           </Notice>
         )}
         {loginItemNotice && (
-          <Notice kind="info">
+          <Notice kind="info" onDismiss={() => ready.current()}>
             {loginItemNotice}{' '}
             <Button variant="ghost" onClick={() => ready.current()}>
               Continue
