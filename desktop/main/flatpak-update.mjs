@@ -17,10 +17,14 @@ function refused(error) {
 export async function connectFlatpakPortal() {
   let path;
   let handlers = {};
+  let bufferedAvailable;
+  let pendingReject;
   const bus = await connectSessionBus({
     onSignal: (message) => {
-      if (message.path === path && message.type === signalType)
-        handlers[message.member]?.(message.values[0] ?? {});
+      if (message.path !== path || message.type !== signalType) return;
+      const handler = handlers[message.member];
+      if (handler) handler(message.values[0] ?? {});
+      else if (message.member === 'UpdateAvailable') bufferedAvailable = message.values[0] ?? {};
     },
   });
   const call = (target, interfaceName, member, signature, values) =>
@@ -43,23 +47,33 @@ export async function connectFlatpakPortal() {
   return {
     onAvailable(handler) {
       handlers.UpdateAvailable = handler;
+      if (bufferedAvailable) {
+        const value = bufferedAvailable;
+        bufferedAvailable = undefined;
+        handler(value);
+      }
     },
     update(onProgress) {
       return new Promise((resolve, reject) => {
+        pendingReject = reject;
         handlers.Progress = (info) => {
           if (info.status === status.running) return onProgress(info.progress / 100);
           handlers.Progress = undefined;
+          pendingReject = undefined;
           if (info.status === status.empty || info.status === status.done) resolve();
           else reject(refused(new Error(info.error_message || 'The Flatpak update failed.')));
         };
         call(path, monitorInterface, 'Update', 'sa{sv}', ['', {}]).catch((error) => {
           handlers.Progress = undefined;
+          pendingReject = undefined;
           reject(refused(error));
         });
       });
     },
     close() {
       handlers = {};
+      pendingReject?.(new Error('Nod is closing.'));
+      pendingReject = undefined;
       call(path, monitorInterface, 'Close', '', [])
         .catch(() => {})
         .finally(() => bus.close());
@@ -121,6 +135,9 @@ export function createFlatpakUpdater({
                 connectTimer.unref?.();
               }),
             ]);
+          } catch (connectError) {
+            if (!connected) beginConnect();
+            throw connectError;
           } finally {
             clearTimeout(connectTimer);
           }

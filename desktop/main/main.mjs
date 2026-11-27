@@ -2520,7 +2520,8 @@ async function announcePackageUpdate(candidate) {
     return;
   }
   if (candidate.version === (await settings.announcedPackageVersion())) return;
-  if (await notifyUpdate(candidate)) await settings.saveAnnouncedPackageVersion(candidate.version);
+  if ((await notifyUpdate(candidate)) === 'shown')
+    await settings.saveAnnouncedPackageVersion(candidate.version);
 }
 
 async function notifyUpdate(candidate) {
@@ -2537,7 +2538,7 @@ async function notifyUpdate(candidate) {
     quitting ||
     focusedEngineWindow()
   )
-    return true;
+    return 'quiet';
   const notification = new Notification({
     title: `Nod ${candidate.version} is ${candidate.command ? 'available' : 'ready'}`,
     icon: notificationIcon,
@@ -2563,7 +2564,7 @@ async function notifyUpdate(candidate) {
   notification.on('close', () => displayedNotifications.delete(notification));
   notification.on('failed', () => displayedNotifications.delete(notification));
   notification.show();
-  return true;
+  return 'shown';
 }
 
 async function preloadUpdateImages(assets, signal) {
