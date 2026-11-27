@@ -139,7 +139,7 @@ export function createFlatpakUpdater({
               }),
             ]);
           } catch (connectError) {
-            if (!connected) beginConnect();
+            if (!connected && !disposed) beginConnect();
             throw connectError;
           } finally {
             clearTimeout(connectTimer);
@@ -166,7 +166,7 @@ export function createFlatpakUpdater({
           ]);
         } catch (installError) {
           const stale = portal;
-          beginConnect();
+          if (!disposed) beginConnect();
           stale.close();
           throw installError;
         } finally {
