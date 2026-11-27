@@ -2550,8 +2550,15 @@ async function notifyUpdate(candidate) {
   });
   notification.on('click', () => {
     if (quitting) return;
-    if (candidate.command) void checkForUpdates(true);
-    else if (checkingUpdates || updates?.ready) void checkForUpdates(true, true);
+    if (candidate.command) {
+      const current = checkingUpdates;
+      void (current
+        ? current.then(
+            () => checkForUpdates(true),
+            () => checkForUpdates(true),
+          )
+        : checkForUpdates(true));
+    } else if (checkingUpdates || updates?.ready) void checkForUpdates(true, true);
   });
   notification.on('close', () => displayedNotifications.delete(notification));
   notification.on('failed', () => displayedNotifications.delete(notification));

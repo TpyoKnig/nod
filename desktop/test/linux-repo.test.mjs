@@ -41,6 +41,9 @@ test('publishLinuxRepo imports into a staging repo, validates the commit, then s
   assert.ok(importCall[3].endsWith('nod-linux-x64.flatpak'));
   assert.ok(!importCall.includes(repo));
   assert.ok(
+    pullCall && pullCall.some((arg) => arg.includes(repo)) && pullCall.includes('pull-local'),
+  );
+  assert.ok(
     signCall &&
       signCall.includes(repo) &&
       signCall.includes('io.n8n.Nod') &&
