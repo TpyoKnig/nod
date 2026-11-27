@@ -43,7 +43,8 @@ function linuxAutostartState() {
     return { present: false, stale: false };
   }
   const actual = parseDesktopEntry(text);
-  if (actual.Hidden === 'true') return { present: false, stale: false };
+  if (actual.Hidden === 'true' || actual['X-GNOME-Autostart-enabled'] === 'false')
+    return { present: false, stale: false };
   const expected = parseDesktopEntry(autostartEntry());
   const stale = essentialAutostartKeys().some((key) => actual[key] !== expected[key]);
   return { present: true, stale };

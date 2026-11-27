@@ -9471,6 +9471,22 @@ test(
     );
 
     await t.test(
+      'a desktop environment disabled entry is treated as off and never repaired',
+      async (t) => {
+        const { opensAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(t, {
+          NOD_PACKAGE: 'rpm',
+        });
+        await mkdir(dirname(entryPath), { recursive: true });
+        const disabled =
+          '[Desktop Entry]\nType=Application\nName=Nod\nExec=nod\nX-GNOME-Autostart-enabled=false\n';
+        await writeFile(entryPath, disabled);
+        assert.equal(opensAtLogin(), false);
+        assert.equal(repairStaleAutostart(), false);
+        assert.equal(await readFile(entryPath, 'utf8'), disabled);
+      },
+    );
+
+    await t.test(
       'a Desktop Action section is ignored, so its Exec never counts as the main entry',
       async (t) => {
         const { opensAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(t, {
