@@ -279,7 +279,7 @@ export function createSettingsStore(path, encryption, platform = process.platfor
     },
     saveAnnouncedPackageVersion(version) {
       return exclusive(async () => {
-        if (!versionPattern.test(version))
+        if (typeof version !== 'string' || !versionPattern.test(version))
           throw new Error('The announced update version is invalid.');
         await write({ ...(await read()), announcedPackageVersion: version });
       });

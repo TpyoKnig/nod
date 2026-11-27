@@ -7470,6 +7470,23 @@ test('an RPM install announces a newer release once across restarts, shows the p
   assert.equal(restarted.notifications.length, restartedBefore + 1);
 });
 
+test('an RPM updater reports its checking and idle phases so the menu can show progress', async (t) => {
+  const latest = deferred();
+  const phases = [];
+  const updater = createNoticeUpdater({
+    source: { latest: () => latest.promise },
+    currentVersion: '0.5.0',
+    command: 'sudo dnf upgrade nod',
+    onStatus: (phase) => phases.push(phase),
+  });
+  t.after(() => updater.dispose());
+  const checking = updater.check();
+  assert.deepEqual(phases, ['checking']);
+  latest.resolve(undefined);
+  await checking;
+  assert.deepEqual(phases, ['checking', 'idle']);
+});
+
 test(
   'manual update failures fence concurrent requests and keep the safe reason until an explicit retry',
   { timeout: 10_000 },

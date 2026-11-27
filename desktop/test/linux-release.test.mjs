@@ -69,7 +69,10 @@ test('RPM release manifest matches the bytes on disk and the fields the desktop 
   assert.equal(manifest.platform, 'linux-x64-rpm');
   assert.equal(manifest.rpm.file, 'nod-linux-x64.rpm');
   assert.equal(manifest.rpm.bytes, bytes.length);
-  assert.match(manifest.rpm.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(
+    manifest.rpm.sha256,
+    'b9e7c44623b3a7d31145b3dd7524d67cca5dde35d05ece9aacc813f54512cf3c',
+  );
   const base = 'https://github.com/n8n-io/nod/releases';
   const manifestUrl = `${base}/download/nod-v${version}/release-linux-x64-rpm.json`;
   const rpm = createUpdateSource({

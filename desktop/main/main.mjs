@@ -2525,16 +2525,12 @@ async function announcePackageUpdate(candidate) {
 }
 
 async function notifyUpdate(candidate) {
-  const { notifications } = await settings.get();
+  let { notifications } = await settings.get();
   if (!notifications || !Notification.isSupported() || quitting || focusedEngineWindow())
     return false;
-  if (
-    isQuietTime((await appPreferences.get()).preferences) ||
-    !notifications ||
-    quitting ||
-    focusedEngineWindow()
-  )
-    return 'quiet';
+  const quietTime = isQuietTime((await appPreferences.get()).preferences);
+  ({ notifications } = await settings.get());
+  if (quietTime || !notifications || quitting || focusedEngineWindow()) return 'quiet';
   const notification = new Notification({
     title: `Nod ${candidate.version} is ${candidate.command ? 'available' : 'ready'}`,
     icon: notificationIcon,
@@ -3386,6 +3382,7 @@ else {
           source: createUpdateSource({ os: 'linux', packaging: 'rpm', fetch: chromiumFetch }),
           currentVersion: app.getVersion(),
           command: 'sudo dnf upgrade nod',
+          onStatus: reportUpdateStatus,
         });
         stopUpdateChecks = startDesktopUpdateChecks({
           check: () => checkForUpdates(false),

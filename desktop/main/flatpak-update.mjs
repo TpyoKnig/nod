@@ -6,6 +6,11 @@ const signalType = 4;
 const status = { running: 0, empty: 1, done: 2 };
 
 function refused(error) {
+  if (/new permissions/i.test(error.message))
+    return new Error(
+      'This update needs permissions your desktop has not granted yet. Install it with: flatpak install --user --reinstall io.n8n.Nod//stable',
+      { cause: error },
+    );
   return /not\s*allowed/i.test(error.message)
     ? new Error(
         'Your desktop does not let Nod update itself. Allow it in your privacy settings, or run flatpak permission-reset io.n8n.Nod and try again.',

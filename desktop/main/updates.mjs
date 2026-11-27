@@ -533,7 +533,7 @@ export function createDesktopUpdater({
   };
 }
 
-export function createNoticeUpdater({ source, currentVersion, command }) {
+export function createNoticeUpdater({ source, currentVersion, command, onStatus = () => {} }) {
   const controller = new AbortController();
   let checking;
   let disposed = false;
@@ -541,11 +541,13 @@ export function createNoticeUpdater({ source, currentVersion, command }) {
     ready: undefined,
     check() {
       if (disposed) return Promise.reject(new Error('Nod is closing.'));
+      if (!checking) onStatus('checking');
       checking ??= source
         .latest(currentVersion, controller.signal)
         .then((candidate) => candidate && { ...candidate, command })
         .finally(() => {
           checking = undefined;
+          onStatus('idle');
         });
       return checking;
     },
