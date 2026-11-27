@@ -7350,6 +7350,32 @@ test('disposing a Flatpak updater rejects a stalled connection attempt instead o
   await assert.rejects(checking, /Nod is closing/);
 });
 
+test('a Flatpak update that finds nothing to install succeeds only when the deployed commit already matches the candidate', async () => {
+  const commit = 'c'.repeat(64);
+  for (const matches of [true, false]) {
+    let available;
+    const updater = createFlatpakUpdater({
+      connect: async () => ({
+        onAvailable: (handler) => (available = handler),
+        update: async () => {
+          throw Object.assign(new Error('The Flatpak portal found nothing to install.'), {
+            code: 'FLATPAK_UPDATE_EMPTY',
+          });
+        },
+        close: () => {},
+      }),
+      source: { latest: async () => ({ version: '0.5.2', source: 'a'.repeat(40), commit }) },
+      currentVersion: '0.5.0',
+      restart: async () => {},
+    });
+    assert.equal(await updater.check(), undefined);
+    available({ 'remote-commit': commit, 'local-commit': matches ? commit : 'd'.repeat(64) });
+    if (matches) assert.equal((await updater.check()).version, '0.5.2');
+    else await assert.rejects(updater.check(), /nothing to install/);
+    await updater.dispose();
+  }
+});
+
 test('a Flatpak install that waits on an unanswered desktop prompt stops after its timeout and can be retried', async () => {
   const commit = 'c'.repeat(64);
   let answered = false;

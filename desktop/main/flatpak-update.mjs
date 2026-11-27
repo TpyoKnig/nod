@@ -72,7 +72,11 @@ export async function connectFlatpakPortal() {
           pendingReject = undefined;
           if (info.status === status.done) resolve();
           else if (info.status === status.empty)
-            reject(new Error('The Flatpak portal found nothing to install. Try again.'));
+            reject(
+              Object.assign(new Error('The Flatpak portal found nothing to install.'), {
+                code: 'FLATPAK_UPDATE_EMPTY',
+              }),
+            );
           else reject(refused(new Error(info.error_message || 'The Flatpak update failed.')));
         };
         call(path, monitorInterface, 'Update', 'sa{sv}', ['', {}]).catch((error) => {
@@ -104,6 +108,7 @@ export function createFlatpakUpdater({
   const controller = new AbortController();
   let portal;
   let available;
+  let localCommit;
   let ready;
   let checking;
   let restarting;
@@ -121,6 +126,7 @@ export function createFlatpakUpdater({
       if (disposed) return value.close();
       value.onAvailable((info) => {
         available = info['remote-commit'];
+        localCommit = info['local-commit'];
       });
     });
     started.catch(() => {});
@@ -184,6 +190,11 @@ export function createFlatpakUpdater({
             }),
           ]);
         } catch (installError) {
+          if (installError.code === 'FLATPAK_UPDATE_EMPTY' && localCommit === candidate.commit) {
+            controller.signal.throwIfAborted();
+            ready = { ...candidate };
+            return ready;
+          }
           const stale = portal;
           if (!disposed) beginConnect();
           stale.close();
