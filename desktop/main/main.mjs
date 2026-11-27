@@ -2075,7 +2075,10 @@ async function saveRendererSettings(event, value) {
       if (value.onboardingPreferenceStep !== 'complete' || value.launchAtLogin !== true)
         throw error;
       lastLoginItemAttemptFailed = true;
-      loginItemFailureMessage = error.message;
+      loginItemFailureMessage =
+        error.retryable === false
+          ? error.message
+          : `${error.message} You can turn it on later in Settings.`;
       if (typeof previousLogin === 'boolean') {
         try {
           setOpenAtLogin(previousLogin);

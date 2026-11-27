@@ -35,11 +35,11 @@ function linuxAutostartState() {
   let text;
   try {
     text = readFileSync(autostartPath(), 'utf8');
-  } catch (error) {
-    if (error.code === 'ENOENT') return { present: false, stale: false };
-    throw error;
+  } catch {
+    return { present: false, stale: false };
   }
   const actual = parseDesktopEntry(text);
+  if (actual.Hidden === 'true') return { present: false, stale: false };
   const expected = parseDesktopEntry(autostartEntry());
   const stale = essentialAutostartKeys().some((key) => actual[key] !== expected[key]);
   return { present: true, stale };
@@ -64,7 +64,11 @@ export function opensAtLogin() {
 export function setOpenAtLogin(open) {
   if (process.platform !== 'linux') return app.setLoginItemSettings({ openAtLogin: open });
   if (!open) return rmSync(autostartPath(), { force: true });
-  if (!linuxPackage()) throw new Error('Open at login needs the Flatpak or the RPM package.');
+  if (!linuxPackage()) {
+    const error = new Error('Open at login needs the Flatpak or the RPM package.');
+    error.retryable = false;
+    throw error;
+  }
   writeAutostartAtomically();
 }
 

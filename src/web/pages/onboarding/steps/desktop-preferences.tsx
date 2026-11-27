@@ -60,7 +60,7 @@ export function DesktopPreferencesSetup({
         )}
         {loginItemNotice && (
           <Notice kind="info">
-            {loginItemNotice} You can turn it on later in Settings.{' '}
+            {loginItemNotice}{' '}
             <Button variant="ghost" onClick={() => ready.current()}>
               Continue
             </Button>

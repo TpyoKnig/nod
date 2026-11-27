@@ -9093,7 +9093,14 @@ test(
         const { opensAtLogin, setOpenAtLogin, repairStaleAutostart, entryPath } =
           await loadLoginItem(t);
         assert.equal(opensAtLogin(), false);
-        assert.throws(() => setOpenAtLogin(true), /needs the Flatpak or the RPM package/);
+        assert.throws(
+          () => setOpenAtLogin(true),
+          (error) => {
+            assert.match(error.message, /needs the Flatpak or the RPM package/);
+            assert.equal(error.retryable, false);
+            return true;
+          },
+        );
         assert.equal(opensAtLogin(), false);
         assert.equal(repairStaleAutostart(), false);
         await assert.rejects(readFile(entryPath));
@@ -9116,6 +9123,31 @@ test(
       setOpenAtLogin(false);
       assert.equal(opensAtLogin(), false);
       await assert.rejects(readFile(entryPath));
+    });
+
+    await t.test(
+      'a disabled entry is treated as off and never repaired even when stale',
+      async (t) => {
+        const { opensAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(t, {
+          NOD_PACKAGE: 'rpm',
+        });
+        await mkdir(dirname(entryPath), { recursive: true });
+        const disabled =
+          '[Desktop Entry]\nType=Application\nName=Nod\nExec=/opt/old-nod/nod\nHidden=true\n';
+        await writeFile(entryPath, disabled);
+        assert.equal(opensAtLogin(), false);
+        assert.equal(repairStaleAutostart(), false);
+        assert.equal(await readFile(entryPath, 'utf8'), disabled);
+      },
+    );
+
+    await t.test('a read error other than a missing file is treated as absent', async (t) => {
+      const { opensAtLogin, repairStaleAutostart, entryPath } = await loadLoginItem(t, {
+        NOD_PACKAGE: 'rpm',
+      });
+      await mkdir(entryPath, { recursive: true });
+      assert.equal(opensAtLogin(), false);
+      assert.equal(repairStaleAutostart(), false);
     });
 
     await t.test(
